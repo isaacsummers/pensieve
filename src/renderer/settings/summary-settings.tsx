@@ -7,10 +7,11 @@ import {
   Flex,
   Heading,
   RadioCards,
+  Spinner,
   Text,
   TextArea,
 } from "@radix-ui/themes";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { HiPlay } from "react-icons/hi2";
 import { Settings } from "../../types";
 import { SettingsSwitchField } from "./settings-switch-field";
@@ -170,6 +171,122 @@ export const OpenAiSettings: FC = () => {
   );
 };
 
+const OllamaServiceControls: FC = () => {
+  const statusQuery = useQuery({
+    queryKey: ["ollama-status"],
+    queryFn: llmApi.ollamaStatus,
+    refetchInterval: 5000,
+    refetchIntervalInBackground: true,
+  });
+
+  const startMutation = useMutation({
+    mutationFn: llmApi.ollamaStart,
+    onSettled: () => statusQuery.refetch(),
+  });
+
+  const stopMutation = useMutation({
+    mutationFn: llmApi.ollamaStop,
+    onSettled: () => statusQuery.refetch(),
+  });
+
+  const status = statusQuery.data;
+  const isBusy = startMutation.isPending || stopMutation.isPending;
+
+  if (!status) {
+    return (
+      <Flex gap="0.5rem" align="center" mb="0.75rem">
+        <Spinner size="1" />
+        <Text size="2" color="gray">
+          Checking Ollama…
+        </Text>
+      </Flex>
+    );
+  }
+
+  if (!status.installed) {
+    return (
+      <Flex gap="0.5rem" align="center" mb="0.75rem">
+        <Box
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: "50%",
+            backgroundColor: "var(--gray-9)",
+            flexShrink: 0,
+          }}
+        />
+        <Text size="2" color="gray">
+          Ollama not installed —
+        </Text>
+        <Button
+          type="button"
+          variant="ghost"
+          size="1"
+          onClick={() => mainApi.openWeb("https://ollama.com/download")}
+        >
+          Download
+        </Button>
+      </Flex>
+    );
+  }
+
+  return (
+    <Flex gap="0.5rem" align="center" mb="0.75rem" wrap="wrap">
+      {/* Status dot + label */}
+      <Box
+        style={{
+          width: 8,
+          height: 8,
+          borderRadius: "50%",
+          backgroundColor: status.running ? "var(--green-9)" : "var(--red-9)",
+          flexShrink: 0,
+        }}
+      />
+      <Text size="2" color={status.running ? "green" : "red"}>
+        {status.running ? "Running" : "Stopped"}
+      </Text>
+
+      {/* Start / Stop button */}
+      {isBusy ? (
+        <Flex gap="0.25rem" align="center">
+          <Spinner size="1" />
+          <Text size="2" color="gray">
+            {startMutation.isPending ? "Starting…" : "Stopping…"}
+          </Text>
+        </Flex>
+      ) : status.running ? (
+        <Button
+          type="button"
+          variant="soft"
+          color="red"
+          size="1"
+          onClick={() => stopMutation.mutate()}
+        >
+          Stop Ollama
+        </Button>
+      ) : (
+        <Button
+          type="button"
+          variant="soft"
+          color="green"
+          size="1"
+          onClick={() => startMutation.mutate()}
+        >
+          Start Ollama
+        </Button>
+      )}
+
+      {/* Error feedback */}
+      {(startMutation.data?.ok === false ||
+        stopMutation.data?.ok === false) && (
+        <Text size="1" color="red">
+          {startMutation.data?.message ?? stopMutation.data?.message}
+        </Text>
+      )}
+    </Flex>
+  );
+};
+
 export const OllamaSettings: FC = () => {
   const form = useFormContext<Settings>();
   return (
@@ -177,10 +294,12 @@ export const OllamaSettings: FC = () => {
       <Heading mt="4rem" as="h2" size="4">
         Ollama Settings
       </Heading>
-      <Text as="p" mb="1rem">
+      <Text as="p" mb="0.5rem">
         You need to make sure that Ollama is installed locally, running and
         reachable.
       </Text>
+
+      <OllamaServiceControls />
 
       <SettingsField label="Install">
         <Button

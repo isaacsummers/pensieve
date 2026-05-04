@@ -1,3 +1,4 @@
+import { execa } from "execa";
 import { getSettings } from "../domain/settings";
 
 export const llmApi = {
@@ -63,5 +64,96 @@ export const llmApi = {
     }
 
     return { ok: true, message: `Ollama running — model ${model} available.` };
+  },
+
+  ollamaStatus: async (): Promise<{ running: boolean; installed: boolean }> => {
+    // Check if ollama binary exists
+    let installed = true;
+    try {
+      await execa("ollama", ["--version"], { timeout: 5000 });
+    } catch (err: any) {
+      // ENOENT means not found on PATH
+      if (err.code === "ENOENT") {
+        installed = false;
+      }
+      // Other errors (e.g. non-zero exit) still mean it's installed
+    }
+
+    // Check if Ollama HTTP is reachable
+    let running = false;
+    try {
+      const res = await fetch("http://localhost:11434", {
+        signal: AbortSignal.timeout(3000),
+      });
+      running = res.ok || res.status < 500;
+    } catch {
+      running = false;
+    }
+
+    return { running, installed };
+  },
+
+  ollamaStart: async (): Promise<{ ok: boolean; message: string }> => {
+    const isWindows = process.platform === "win32";
+    try {
+      if (isWindows) {
+        // Detached, no window — Windows
+        const child = execa("ollama", ["serve"], {
+          detached: true,
+          stdio: "ignore",
+          windowsHide: true,
+        });
+        child.unref();
+      } else {
+        // Mac/Linux
+        const child = execa("ollama", ["serve"], {
+          detached: true,
+          stdio: "ignore",
+        });
+        child.unref();
+      }
+    } catch (err: any) {
+      if (err.code === "ENOENT") {
+        return { ok: false, message: "Ollama not found on PATH." };
+      }
+      return { ok: false, message: String(err.message ?? err) };
+    }
+
+    // Poll until reachable (max 10s)
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      await new Promise<void>((r) => {
+        setTimeout(r, 500);
+      });
+      try {
+        const res = await fetch("http://localhost:11434", {
+          signal: AbortSignal.timeout(2000),
+        });
+        if (res.ok || res.status < 500) {
+          return { ok: true, message: "Ollama started." };
+        }
+      } catch {
+        // keep polling
+      }
+    }
+    return { ok: false, message: "Ollama did not respond within 10 seconds." };
+  },
+
+  ollamaStop: async (): Promise<{ ok: boolean; message: string }> => {
+    const isWindows = process.platform === "win32";
+    try {
+      if (isWindows) {
+        await execa("taskkill", ["/f", "/im", "ollama.exe"]);
+      } else {
+        await execa("pkill", ["ollama"]);
+      }
+      return { ok: true, message: "Ollama stopped." };
+    } catch (err: any) {
+      // pkill/taskkill exit 1 when no process found — treat as already stopped
+      if (err.exitCode === 1 || err.exitCode === 128) {
+        return { ok: true, message: "Ollama was not running." };
+      }
+      return { ok: false, message: String(err.message ?? err) };
+    }
   },
 };
