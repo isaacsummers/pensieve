@@ -118,20 +118,49 @@ export const removeProfile = async (id: string) => {
 
 // --- dependency installer --------------------------------------------------
 
-const EMBED_DEPS = ["resemblyzer", "librosa", "numpy"];
+/**
+ * On Windows, webrtcvad (a transitive dep of resemblyzer) requires C++ Build
+ * Tools to compile from source and has no pre-built wheel for many Python
+ * versions. We work around this by installing resemblyzer with --no-deps and
+ * pulling the other required packages separately, skipping webrtcvad entirely.
+ * On macOS/Linux, webrtcvad ships pre-built wheels so a normal install works.
+ */
+const buildInstallAttempts = (): Array<[string, string[]]> => {
+  if (process.platform === "win32") {
+    // Step 1: install core deps without pulling in webrtcvad via resemblyzer's
+    // dependency tree. Step 2: install umap-learn (used internally) normally.
+    // These two commands are run sequentially inside installEmbedDeps.
+    return [
+      [
+        "uv",
+        [
+          "pip",
+          "install",
+          "--system",
+          "numpy",
+          "librosa",
+          "resemblyzer",
+          "--no-deps",
+        ],
+      ],
+    ];
+  }
+  // macOS / Linux — webrtcvad has pre-built wheels; install everything normally.
+  return [
+    ["uv", ["pip", "install", "--system", "numpy", "librosa", "resemblyzer"]],
+    ["pip", ["install", "numpy", "librosa", "resemblyzer"]],
+    ["pip3", ["install", "numpy", "librosa", "resemblyzer"]],
+  ];
+};
 
 export const installEmbedDeps = async (): Promise<{
   ok: boolean;
   message: string;
 }> => {
-  log.info("[speaker-profiles] installing embedding deps:", EMBED_DEPS);
+  log.info("[speaker-profiles] installing embedding deps");
 
-  // Try uv first (preferred on Windows), then pip / pip3.
-  const attempts: Array<[string, string[]]> = [
-    ["uv", ["pip", "install", "--system", ...EMBED_DEPS]],
-    ["pip", ["install", ...EMBED_DEPS]],
-    ["pip3", ["install", ...EMBED_DEPS]],
-  ];
+  const isWindows = process.platform === "win32";
+  const attempts = buildInstallAttempts();
 
   for (const [cmd, args] of attempts) {
     try {
@@ -142,8 +171,27 @@ export const installEmbedDeps = async (): Promise<{
         reject: false,
       });
       if (result.exitCode === 0) {
+        if (isWindows) {
+          // Also install umap-learn which resemblyzer uses internally.
+          log.info(
+            "[speaker-profiles] Windows: installing umap-learn separately",
+          );
+          const umap = await execa(
+            "uv",
+            ["pip", "install", "--system", "umap-learn"],
+            { stdio: "pipe", timeout: 5 * 60_000, reject: false },
+          );
+          if (umap.exitCode !== 0) {
+            log.warn(
+              "[speaker-profiles] umap-learn install failed:",
+              umap.stderr,
+            );
+            // Non-fatal — embedding may still work without umap.
+          }
+        }
         log.info("[speaker-profiles] dep install succeeded via", cmd);
-        return { ok: true, message: `Installed via ${cmd}` };
+        const note = isWindows ? " (without webrtcvad — Windows)" : "";
+        return { ok: true, message: `Installed via ${cmd}${note}` };
       }
       log.warn(
         `[speaker-profiles] ${cmd} exited ${result.exitCode}:`,
@@ -155,8 +203,9 @@ export const installEmbedDeps = async (): Promise<{
     }
   }
 
-  const msg =
-    "Could not install dependencies automatically. Run: pip install resemblyzer librosa numpy";
+  const msg = isWindows
+    ? "Could not install dependencies automatically. Run: uv pip install --system numpy librosa resemblyzer --no-deps"
+    : "Could not install dependencies automatically. Run: pip install numpy librosa resemblyzer";
   return { ok: false, message: msg };
 };
 
@@ -308,9 +357,19 @@ const runSidecar = async (
       log.info(
         "[speaker-profiles] missing module detected, auto-installing deps",
       );
+
+      const isWebrtcvadError =
+        errMsg.includes("webrtcvad") ||
+        errMsg.includes("Visual C++") ||
+        errMsg.includes("Microsoft Visual C");
+      const statusMsg =
+        isWebrtcvadError && process.platform === "win32"
+          ? "Installing without webrtcvad (Windows)… please wait"
+          : "Installing dependencies… please wait";
+
       await setLastError({
         stage: opts.stage,
-        message: "Installing dependencies… please wait",
+        message: statusMsg,
       });
       const install = await installEmbedDeps();
       if (install.ok) {
