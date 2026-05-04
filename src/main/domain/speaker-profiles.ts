@@ -139,13 +139,15 @@ const resolveScriptPath = async (): Promise<string> => {
 
   // Candidates: packaged resources, source tree, cwd.
   const candidates: string[] = [];
-  // When running under Electron Forge / packaged app, extra/ is copied to
-  // resourcesPath. During dev it sits next to the project root.
+  // When running under Electron Forge / packaged app, scripts/ is copied to
+  // resourcesPath/scripts via the forge extraResource entry. During dev it
+  // sits next to the project root.
   try {
     if (process.resourcesPath) {
       candidates.push(
-        path.join(process.resourcesPath, "extra", "embed_speakers.py"),
+        path.join(process.resourcesPath, "scripts", "embed_speakers.py"),
       );
+      candidates.push(path.join(process.resourcesPath, "embed_speakers.py"));
     }
   } catch {
     /* ignore */
@@ -153,15 +155,23 @@ const resolveScriptPath = async (): Promise<string> => {
   try {
     const here = typeof __dirname === "string" ? __dirname : process.cwd();
     candidates.push(
-      path.resolve(here, "..", "..", "..", "extra", "embed_speakers.py"),
+      path.resolve(here, "..", "..", "..", "scripts", "embed_speakers.py"),
     );
     candidates.push(
-      path.resolve(here, "..", "..", "..", "..", "extra", "embed_speakers.py"),
+      path.resolve(
+        here,
+        "..",
+        "..",
+        "..",
+        "..",
+        "scripts",
+        "embed_speakers.py",
+      ),
     );
   } catch {
     /* ignore */
   }
-  candidates.push(path.resolve(process.cwd(), "extra", "embed_speakers.py"));
+  candidates.push(path.resolve(process.cwd(), "scripts", "embed_speakers.py"));
 
   for (const c of candidates) {
     if (fs.existsSync(c)) return c;

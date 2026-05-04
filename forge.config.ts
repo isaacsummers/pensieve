@@ -35,7 +35,7 @@ const config: ForgeConfig = {
     asar: {
       unpack: "*.{node,dll,exe}",
     },
-    extraResource: "./extra",
+    extraResource: ["./extra", "./scripts"],
     icon: "./extra/icon@8x.ico",
   },
   rebuildConfig: {},
