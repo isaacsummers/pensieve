@@ -156,6 +156,8 @@ export const toJoinedFile = async (
         input2,
         "-filter_complex",
         (await settings.getSettings()).ffmpeg.mp3Filter,
+        "-map",
+        "[aout]",
         "-y",
         output,
       ],

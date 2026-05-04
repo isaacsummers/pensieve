@@ -144,7 +144,8 @@ export const defaultSettings = {
 
     stereoWavFilter:
       "[0:a][1:a] amerge=inputs=2, pan=stereo|c0<c0+c1|c1<c2+c3, highpass=f=300, lowpass=f=3000 [a]",
-    mp3Filter: "amix=inputs=2:duration=longest",
+    mp3Filter:
+      "[0:a]aformat=channel_layouts=stereo[a0];[1:a]aformat=channel_layouts=stereo[a1];[a0][a1]amix=inputs=2:duration=longest[aout]",
   },
   whisperx: {
     executable: "whisperx",
