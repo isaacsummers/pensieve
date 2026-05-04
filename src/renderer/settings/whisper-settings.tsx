@@ -153,6 +153,12 @@ export const WhisperSettings: FC = () => {
       />
 
       <Heading mt="2rem" size="4">
+        Transcription pipeline
+      </Heading>
+      {/* eslint-disable-next-line @typescript-eslint/no-use-before-define */}
+      <TestTranscriptionPanel />
+
+      <Heading mt="2rem" size="4">
         Model
       </Heading>
       <Text as="p">
@@ -312,6 +318,32 @@ export const WhisperSettings: FC = () => {
         description="Run the wav2vec alignment pass. Disable to save time if you do not need word-level timestamps."
       />
     </Tabs.Content>
+  );
+};
+
+const TestTranscriptionPanel: FC = () => {
+  const testMutation = useMutation({
+    mutationFn: whisperxApi.testTranscriptionPipeline,
+  });
+  const result = testMutation.data;
+
+  return (
+    <Flex gap="0.5rem" align="center" mt="0.25rem" mb="0.5rem">
+      <Button
+        type="button"
+        variant="outline"
+        onClick={() => testMutation.mutate()}
+        disabled={testMutation.isPending}
+      >
+        <HiPlay />
+        {testMutation.isPending ? "Testing…" : "Test transcription pipeline"}
+      </Button>
+      {result && (
+        <Text size="2" color={result.ok ? "green" : "red"}>
+          {result.message}
+        </Text>
+      )}
+    </Flex>
   );
 };
 

@@ -20,6 +20,9 @@ contextBridge.exposeInMainWorld("ipcApi", {
   speakerProfiles: {
     invoke: (payload: any) => ipcRenderer.invoke("speakerProfiles", payload),
   },
+  llm: {
+    invoke: (payload: any) => ipcRenderer.invoke("llm", payload),
+  },
   recorderIpc: {
     invoke: (payload: any) => ipcRenderer.invoke("recorderIpc", payload),
     onEvent: (type: string, listener: (...args: any[]) => void) => {

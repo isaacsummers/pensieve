@@ -5,6 +5,7 @@ import type { modelsApi as modelsApiBackend } from "../main/ipc/models-api";
 import type { whisperxApi as whisperxApiBackend } from "../main/ipc/whisperx-api";
 import type { historyApi as historyApiBackend } from "../main/ipc/history-api";
 import type { speakerProfilesApi as speakerProfilesApiBackend } from "../main/ipc/speaker-profiles-api";
+import type { llmApi as llmApiBackend } from "../main/ipc/llm-api";
 import type { recorderIpcApi as recorderIpcApiBackend } from "../main/ipc/recorder-ipc";
 
 export const mainApi = createRendererIpc<typeof mainApiBackend>("main");
@@ -17,5 +18,6 @@ export const historyApi =
   createRendererIpc<typeof historyApiBackend>("history");
 export const speakerProfilesApi =
   createRendererIpc<typeof speakerProfilesApiBackend>("speakerProfiles");
+export const llmApi = createRendererIpc<typeof llmApiBackend>("llm");
 export const recorderIpcApi =
   createRendererIpc<typeof recorderIpcApiBackend>("recorderIpc");

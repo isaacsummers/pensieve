@@ -10,12 +10,14 @@ import {
   Text,
   TextArea,
 } from "@radix-ui/themes";
+import { useMutation } from "@tanstack/react-query";
+import { HiPlay } from "react-icons/hi2";
 import { Settings } from "../../types";
 import { SettingsSwitchField } from "./settings-switch-field";
 import { SettingsTextField } from "./settings-text-field";
 import { SettingsSelectField } from "./settings-select-field";
 import { SettingsField } from "./settings-field";
-import { mainApi } from "../api";
+import { llmApi, mainApi } from "../api";
 import { SettingsTab } from "./tabs";
 
 const openAiModels = [
@@ -233,6 +235,10 @@ export const DetailedSummarySettings: FC = () => {
   const form = useFormContext<Settings>();
   return (
     <>
+      <Flex gap="0.5rem" align="center" mt="1rem" mb="0.25rem">
+        {/* eslint-disable-next-line @typescript-eslint/no-use-before-define */}
+        <TestSummarizationPanel />
+      </Flex>
       <SettingsField label="Additional prompt">
         <TextArea
           resize="vertical"
@@ -345,5 +351,32 @@ export const SummarySettings: FC = () => {
       </SettingsField>
       {form.watch("llm.enabled") && <DetailedSummarySettings />}
     </Tabs.Content>
+  );
+};
+
+const TestSummarizationPanel: FC = () => {
+  const testMutation = useMutation({
+    mutationFn: llmApi.testSummarizationPipeline,
+  });
+  const result = testMutation.data;
+
+  return (
+    <Flex gap="0.5rem" align="center">
+      <Button
+        type="button"
+        variant="outline"
+        onClick={() => testMutation.mutate()}
+        disabled={testMutation.isPending}
+      >
+        <HiPlay />
+        {testMutation.isPending ? "Testing…" : "Test summarization pipeline"}
+      </Button>
+      {result && (
+        <Text size="2" color={result.ok ? "green" : "red"}>
+          {result.ok ? "OK: " : "Failed: "}
+          {result.message}
+        </Text>
+      )}
+    </Flex>
   );
 };

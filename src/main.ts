@@ -12,6 +12,7 @@ import { modelsApi } from "./main/ipc/models-api";
 import { whisperxApi } from "./main/ipc/whisperx-api";
 import { historyApi } from "./main/ipc/history-api";
 import { speakerProfilesApi } from "./main/ipc/speaker-profiles-api";
+import { llmApi } from "./main/ipc/llm-api";
 import * as history from "./main/domain/history";
 import * as searchIndex from "./main/domain/search";
 import * as settings from "./main/domain/settings";
@@ -79,6 +80,7 @@ app.whenReady().then(async () => {
   loadIpcInterfaceInMain("models", modelsApi);
   loadIpcInterfaceInMain("whisperx", whisperxApi);
   loadIpcInterfaceInMain("speakerProfiles", speakerProfilesApi);
+  loadIpcInterfaceInMain("llm", llmApi);
   loadIpcInterfaceInMain("recorderIpc", recorderIpcApi);
 
   searchIndex.initializeSearchIndex().then(() => {
