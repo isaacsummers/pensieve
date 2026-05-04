@@ -10,4 +10,6 @@ export enum QueryKeys {
   MicrophoneSources = "microphonesources",
   DialogData = "dialogdata",
   RecorderIpcState = "recorderipcstate",
+  SpeakerProfiles = "speakerprofiles",
+  SpeakerPipelineStatus = "speakerpipelinestatus",
 }

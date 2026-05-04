@@ -11,6 +11,15 @@ import { SpeakerTitle } from "./speaker-title";
 export const TranscriptItemUi = memo<{
   text: string;
   speaker: string;
+  speakerDisplayName?: string;
+  speakerMatch?: {
+    profileId: string | null;
+    profileName: string | null;
+    confidence: number;
+    matched: boolean;
+  };
+  onRenameSpeaker?: (name: string) => Promise<void> | void;
+  onSaveSpeakerProfile?: (name: string) => Promise<void> | void;
   isProgressAtItem: boolean;
   isAudioPlaying: boolean;
   isHighlighted: boolean;
@@ -24,6 +33,10 @@ export const TranscriptItemUi = memo<{
   ({
     text,
     speaker,
+    speakerDisplayName,
+    speakerMatch,
+    onRenameSpeaker,
+    onSaveSpeakerProfile,
     isProgressAtItem,
     isAudioPlaying,
     isHighlighted,
@@ -35,7 +48,16 @@ export const TranscriptItemUi = memo<{
     nextItems,
   }) => (
     <>
-      {isNewSpeaker && <SpeakerTitle speaker={speaker} timeText={timeText} />}
+      {isNewSpeaker && (
+        <SpeakerTitle
+          speaker={speaker}
+          timeText={timeText}
+          displayName={speakerDisplayName}
+          match={speakerMatch}
+          onRename={onRenameSpeaker}
+          onSaveProfile={onSaveSpeakerProfile}
+        />
+      )}
       <Box
         id={`transcript-item-${time}`}
         pl="calc(32px + 0.5rem)"

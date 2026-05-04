@@ -1,7 +1,8 @@
-import { memo, useMemo } from "react";
+import { memo, useCallback, useMemo } from "react";
 import { RecordingMeta, RecordingTranscriptItem } from "../../../types";
 import { useManagedAudio } from "../use-managed-audio";
 import { isInRange, useEvent } from "../../../utils";
+import { speakerProfilesApi } from "../../api";
 import { TranscriptItemUi } from "./transcript-item-ui";
 import { Screenshot } from "./screenshot";
 import { TimeframedComment } from "./timeframed-comment";
@@ -130,11 +131,51 @@ export const TranscriptItem = memo<{
       [timestampedNotes, screenshots, recordingId],
     );
 
+    const onRenameSpeaker = useCallback(
+      async (name: string) => {
+        const next = await speakerProfilesApi.renameSpeakerOnRecording(
+          recordingId,
+          item.speaker,
+          name,
+        );
+        await updateMeta({ speakerNames: next });
+      },
+      [recordingId, item.speaker, updateMeta],
+    );
+
+    const onSaveAsProfile = useCallback(
+      async (name: string) => {
+        const profile = await speakerProfilesApi.saveFromRecording(
+          recordingId,
+          item.speaker,
+          name,
+        );
+        if (!profile) {
+          // No embedding available — surface in meta so the UI can show it.
+          await updateMeta({
+            pipelineError: {
+              stage: "save-profile",
+              message:
+                "No voice embedding found for this speaker. Re-run post-processing to generate embeddings.",
+            },
+          });
+        }
+      },
+      [recordingId, item.speaker, updateMeta],
+    );
+
+    const speakerDisplayName = meta.speakerNames?.[item.speaker];
+    const speakerMatch = meta.speakerMatches?.[item.speaker];
+
     return (
       <TranscriptItemUi
         key={item.timestamps.from}
         text={text}
         speaker={item.speaker}
+        speakerDisplayName={speakerDisplayName}
+        speakerMatch={speakerMatch}
+        onRenameSpeaker={onRenameSpeaker}
+        onSaveSpeakerProfile={onSaveAsProfile}
         isProgressAtItem={isProgressAtItem}
         isAudioPlaying={audio.isPlaying}
         isHighlighted={!!isHighlighted}

@@ -7,6 +7,7 @@ import { buildArgs, getMillisecondsFromTimeString } from "../../main-utils";
 import * as ffmpeg from "./ffmpeg";
 import * as runner from "./runner";
 import * as postprocess from "./postprocess";
+import * as speakerProfiles from "./speaker-profiles";
 import { getSettings } from "./settings";
 import { RecordingTranscript } from "../../types";
 
@@ -147,7 +148,10 @@ export const processWavFile = async (
   input: string,
   output: string,
   modelId: string,
-) => {
+): Promise<{
+  transcript: RecordingTranscript;
+  segments: Array<{ speaker: string; start: number; end: number }>;
+}> => {
   await ensureWhisperxAvailable();
   postprocess.setStep("whisper");
 
@@ -239,5 +243,78 @@ export const processWavFile = async (
   await fs.writeJSON(output, transcript);
   await fs.remove(wxJsonPath).catch(() => {});
 
+  const rawSegments = Array.isArray(wx.segments) ? wx.segments : [];
+  const segments = rawSegments
+    .filter(
+      (s) =>
+        typeof s.start === "number" &&
+        typeof s.end === "number" &&
+        s.end > s.start,
+    )
+    .map((s) => ({
+      speaker: normalizeSpeaker(s.speaker),
+      start: s.start as number,
+      end: s.end as number,
+    }));
+
   log.info("Processed WAV file via WhisperX");
+  return { transcript, segments };
+};
+
+export const runSpeakerEmbeddingPipeline = async (params: {
+  recordingId: string;
+  audioPath: string;
+  segments: Array<{ speaker: string; start: number; end: number }>;
+}): Promise<{
+  speakerEmbeddings?: Record<string, number[]>;
+  speakerMatches?: Record<string, speakerProfiles.SpeakerMatch>;
+  speakerNames?: Record<string, string>;
+  pipelineError?: { stage: string; message: string } | null;
+}> => {
+  const settings = (await getSettings()).whisperx;
+  if (!settings.embeddings?.enabled) {
+    log.info("[embed] speaker embeddings disabled in settings; skipping");
+    return {};
+  }
+  if (!settings.diarize) {
+    log.info("[embed] diarization disabled; skipping embeddings");
+    return {};
+  }
+  if (params.segments.length === 0) {
+    log.warn("[embed] no segments to embed; skipping");
+    return {};
+  }
+
+  try {
+    const result = await speakerProfiles.extractEmbeddings({
+      audioPath: params.audioPath,
+      segments: params.segments,
+    });
+    const matches: Record<string, speakerProfiles.SpeakerMatch> = {};
+    const names: Record<string, string> = {};
+    const threshold = settings.embeddings.matchThreshold ?? 0.75;
+    for (const [speakerKey, embedding] of Object.entries(result.embeddings)) {
+      const match = await speakerProfiles.matchSpeaker(embedding, threshold);
+      matches[speakerKey] = match;
+      if (match.matched && match.profileName) {
+        names[speakerKey] = match.profileName;
+      }
+    }
+    return {
+      speakerEmbeddings: result.embeddings,
+      speakerMatches: matches,
+      speakerNames: Object.keys(names).length ? names : undefined,
+      pipelineError: null,
+    };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    log.error(
+      `[embed] embedding pipeline failed for ${params.recordingId}: ${message}`,
+    );
+    // Degrade gracefully: keep the transcript + default SPEAKER_N labels but
+    // record the error on the recording so the UI can surface it.
+    return {
+      pipelineError: { stage: "embed", message },
+    };
+  }
 };

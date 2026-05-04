@@ -118,15 +118,41 @@ const doMp3Step = async (job: PostProcessingJob) => {
 
 const doWhisperStep = async (job: PostProcessingJob) => {
   if (hasAborted() || !hasStep(job, "whisper")) return;
-  const { wav, recordingsFolder } = await getFilePaths(job);
+  const { wav, mp3, recordingsFolder } = await getFilePaths(job);
 
   const model = await models.prepareConfiguredModel();
 
-  await whisperx.processWavFile(
+  const { segments } = await whisperx.processWavFile(
     wav,
     path.join(recordingsFolder, job.recordingId, "transcript.json"),
     model,
   );
+
+  // Run the speaker embedding + profile-matching pipeline against the mp3
+  // (which is already downmixed/joined) or the wav if the mp3 step ran last.
+  try {
+    const audioForEmbedding = fs.existsSync(mp3) ? mp3 : wav;
+    if (fs.existsSync(audioForEmbedding) && segments.length > 0) {
+      const embed = await whisperx.runSpeakerEmbeddingPipeline({
+        recordingId: job.recordingId,
+        audioPath: audioForEmbedding,
+        segments,
+      });
+      // Merge into meta so the UI can see matches/errors without re-running.
+      await history.updateRecording(job.recordingId, {
+        speakerEmbeddings: embed.speakerEmbeddings,
+        speakerMatches: embed.speakerMatches,
+        speakerNames: embed.speakerNames,
+        pipelineError: embed.pipelineError ?? null,
+      });
+    }
+  } catch (e) {
+    // Last-ditch: never let embeddings crash the whisper step.
+    const message = e instanceof Error ? e.message : String(e);
+    await history.updateRecording(job.recordingId, {
+      pipelineError: { stage: "embed", message },
+    });
+  }
 
   await fs.rm(wav);
 };

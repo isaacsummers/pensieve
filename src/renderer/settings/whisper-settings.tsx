@@ -1,14 +1,27 @@
 import { FC } from "react";
 import * as Tabs from "@radix-ui/react-tabs";
-import { Badge, Button, Callout, Flex, Heading, Text } from "@radix-ui/themes";
+import {
+  Badge,
+  Button,
+  Callout,
+  Flex,
+  Heading,
+  IconButton,
+  Text,
+} from "@radix-ui/themes";
 import { useFormContext } from "react-hook-form";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { GoLinkExternal } from "react-icons/go";
-import { HiOutlineCheckCircle, HiOutlineXCircle } from "react-icons/hi2";
+import {
+  HiOutlineCheckCircle,
+  HiOutlineTrash,
+  HiOutlineXCircle,
+  HiPlay,
+} from "react-icons/hi2";
 import { modelData } from "../../model-data";
 import { Settings } from "../../types";
 import { QueryKeys } from "../../query-keys";
-import { mainApi, whisperxApi } from "../api";
+import { mainApi, speakerProfilesApi, whisperxApi } from "../api";
 import { SettingsTextField } from "./settings-text-field";
 import { SettingsSwitchField } from "./settings-switch-field";
 import { SettingsSelectField } from "./settings-select-field";
@@ -230,6 +243,59 @@ export const WhisperSettings: FC = () => {
         values={["silero", "pyannote"]}
       />
 
+      <SettingsField
+        label="Speaker profiles"
+        description="Rename a speaker on any recording to save them as a reusable voice profile. Future transcriptions will be auto-labeled when the voice matches."
+      >
+        <Text color="gray" size="2">
+          Manage profiles in the panel below.
+        </Text>
+      </SettingsField>
+
+      <Heading mt="2rem" size="4">
+        Voice embedding pipeline
+      </Heading>
+      <Text as="p">
+        Pensieve extracts a voice embedding for each diarized speaker using a
+        Python sidecar (<code>extra/embed_speakers.py</code>,{" "}
+        <a
+          href="https://github.com/resemble-ai/Resemblyzer"
+          onClick={(e) => {
+            e.preventDefault();
+            mainApi.openWeb("https://github.com/resemble-ai/Resemblyzer");
+          }}
+        >
+          Resemblyzer
+        </a>
+        ). Install with <code>pip install resemblyzer librosa numpy</code>.
+      </Text>
+      <SettingsSwitchField
+        form={form}
+        field="whisperx.embeddings.enabled"
+        label="Enable speaker embeddings"
+        description="Compute voice embeddings after diarization and match them against saved profiles. Requires the Python sidecar."
+      />
+      <SettingsTextField
+        {...form.register("whisperx.embeddings.pythonPath")}
+        label="Embeddings Python interpreter (optional)"
+        description="Defaults to the WhisperX Python interpreter, then `python3` on PATH."
+      />
+      <SettingsTextField
+        {...form.register("whisperx.embeddings.scriptPath")}
+        label="Embedding script path (optional)"
+        description="Override the bundled `embed_speakers.py`. Leave blank to use the default location."
+      />
+      <SettingsTextField
+        {...form.register("whisperx.embeddings.matchThreshold", {
+          valueAsNumber: true,
+        })}
+        label="Match threshold"
+        description="Cosine similarity required to auto-label a speaker (0 – 1). Typical: 0.70 – 0.80."
+        type="number"
+      />
+      {/* eslint-disable-next-line @typescript-eslint/no-use-before-define */}
+      <SpeakerProfilesPanel />
+
       <Heading mt="2rem" size="4">
         Other
       </Heading>
@@ -245,13 +311,142 @@ export const WhisperSettings: FC = () => {
         label="Force word alignment"
         description="Run the wav2vec alignment pass. Disable to save time if you do not need word-level timestamps."
       />
-
-      <SettingsField
-        label="Speaker profiles"
-        description="Naming known speakers across recordings is planned for a future release (Phase 2). Current transcripts label speakers as `Speaker 0`, `Speaker 1`, ..."
-      >
-        <Badge color="amber">Coming soon</Badge>
-      </SettingsField>
     </Tabs.Content>
+  );
+};
+
+const SpeakerProfilesPanel: FC = () => {
+  const qc = useQueryClient();
+  const { data: profiles } = useQuery({
+    queryKey: [QueryKeys.SpeakerProfiles],
+    queryFn: speakerProfilesApi.list,
+  });
+  const { data: status } = useQuery({
+    queryKey: [QueryKeys.SpeakerPipelineStatus],
+    queryFn: speakerProfilesApi.getStatus,
+    refetchInterval: 5000,
+  });
+
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: [QueryKeys.SpeakerProfiles] });
+    qc.invalidateQueries({ queryKey: [QueryKeys.SpeakerPipelineStatus] });
+  };
+
+  const testMutation = useMutation({
+    mutationFn: speakerProfilesApi.testPipeline,
+    onSettled: invalidate,
+  });
+  const removeMutation = useMutation({
+    mutationFn: (id: string) => speakerProfilesApi.remove(id),
+    onSettled: invalidate,
+  });
+  const renameMutation = useMutation({
+    mutationFn: ({ id, name }: { id: string; name: string }) =>
+      speakerProfilesApi.rename(id, name),
+    onSettled: invalidate,
+  });
+
+  const lastError = status?.lastError;
+  const lastDryRun = status?.lastDryRun;
+  const testResult = testMutation.data;
+
+  return (
+    <>
+      <Heading mt="1.5rem" size="3">
+        Saved profiles
+      </Heading>
+      <Flex gap="0.5rem" align="center" mt="0.25rem" mb="0.5rem">
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => testMutation.mutate()}
+          disabled={testMutation.isPending}
+        >
+          <HiPlay />
+          {testMutation.isPending ? "Testing…" : "Test embedding pipeline"}
+        </Button>
+        {testResult && (
+          <Text size="2" color={testResult.ok ? "green" : "red"}>
+            {testResult.ok ? "OK: " : "Failed: "}
+            {testResult.message}
+          </Text>
+        )}
+        {!testResult && lastDryRun && (
+          <Text size="2" color={lastDryRun.ok ? "green" : "red"}>
+            Last run: {lastDryRun.ok ? "OK" : "Failed"} — {lastDryRun.message}
+          </Text>
+        )}
+      </Flex>
+      {lastError && (
+        <Callout.Root color="red" variant="surface" mt="0.5rem">
+          <Callout.Icon>
+            <HiOutlineXCircle />
+          </Callout.Icon>
+          <Callout.Text>
+            Last pipeline error ({lastError.stage}): {lastError.message}
+          </Callout.Text>
+        </Callout.Root>
+      )}
+      {profiles && profiles.length === 0 && (
+        <Text as="p" color="gray" size="2" mt="0.5rem">
+          No profiles saved yet. Rename a speaker on any recording and click the
+          bookmark icon to save them as a profile.
+        </Text>
+      )}
+      {profiles && profiles.length > 0 && (
+        <Flex direction="column" gap="0.25rem" mt="0.5rem">
+          {profiles.map((profile) => (
+            <Flex
+              key={profile.id}
+              align="center"
+              gap="0.5rem"
+              py="0.25rem"
+              style={{ borderBottom: "1px solid var(--gray-a4)" }}
+            >
+              <Text
+                style={{ flexGrow: 1, cursor: "pointer" }}
+                onClick={() => {
+                  const next = window.prompt(
+                    "Rename speaker profile",
+                    profile.name,
+                  );
+                  if (next && next.trim() && next.trim() !== profile.name) {
+                    renameMutation.mutate({
+                      id: profile.id,
+                      name: next.trim(),
+                    });
+                  }
+                }}
+              >
+                {profile.name}
+              </Text>
+              <Badge color="gray" variant="soft">
+                {profile.embedding.length}d
+              </Badge>
+              <Text size="1" color="gray">
+                added {new Date(profile.createdAt).toLocaleDateString()}
+              </Text>
+              <IconButton
+                variant="ghost"
+                color="red"
+                size="1"
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      `Delete voice profile “${profile.name}”? Future recordings will no longer be auto-labeled for this speaker.`,
+                    )
+                  ) {
+                    removeMutation.mutate(profile.id);
+                  }
+                }}
+                aria-label="Delete profile"
+              >
+                <HiOutlineTrash />
+              </IconButton>
+            </Flex>
+          ))}
+        </Flex>
+      )}
+    </>
   );
 };

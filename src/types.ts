@@ -33,6 +33,35 @@ export type RecordingMeta = {
     sentenceSummary?: string | null;
   };
   isPinned?: boolean;
+  /**
+   * Per-recording overrides for the display name of a diarization speaker
+   * key (the normalized label stored on transcript items, e.g. "0", "1").
+   * Empty/missing => show the default `Speaker N` label.
+   */
+  speakerNames?: Record<string, string>;
+  /** Auto-match info produced by the embedding pipeline, per speaker key. */
+  speakerMatches?: Record<
+    string,
+    {
+      profileId: string | null;
+      profileName: string | null;
+      confidence: number;
+      matched: boolean;
+    }
+  >;
+  /** Raw per-speaker embedding vectors from the last diarization pass. */
+  speakerEmbeddings?: Record<string, number[]>;
+  /** Most recent non-fatal pipeline error surfaced on this recording. */
+  pipelineError?: { stage: string; message: string } | null;
+};
+
+export type SpeakerProfile = {
+  id: string;
+  name: string;
+  embedding: number[];
+  createdAt: string;
+  updatedAt: string;
+  sampleCount: number;
 };
 
 export type RecordingTranscript = {
@@ -132,6 +161,13 @@ export const defaultSettings = {
     vadMethod: "silero" as "silero" | "pyannote",
     translate: false,
     alignOutput: true,
+    embeddings: {
+      enabled: true,
+      pythonPath: "",
+      scriptPath: "",
+      matchThreshold: 0.75,
+      minSpeakerSeconds: 0.3,
+    },
   },
   datahooks: {
     enabled: false,
