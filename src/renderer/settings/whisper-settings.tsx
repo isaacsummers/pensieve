@@ -421,6 +421,19 @@ const SpeakerProfilesPanel: FC = () => {
     testMutation.mutate();
   };
 
+  const { data: venv } = useQuery({
+    queryKey: [QueryKeys.SpeakerPipelineStatus, "venv"],
+    queryFn: speakerProfilesApi.getVenvStatus,
+    refetchInterval: 10_000,
+  });
+  const rebuildVenv = useMutation({
+    mutationFn: speakerProfilesApi.rebuildVenv,
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: [QueryKeys.SpeakerPipelineStatus] });
+      testMutation.mutate();
+    },
+  });
+
   const lastError = status?.lastError;
   const lastDryRun = status?.lastDryRun;
   const testResult = testMutation.data;
@@ -435,6 +448,81 @@ const SpeakerProfilesPanel: FC = () => {
 
   return (
     <>
+      {venv && (
+        <Flex
+          direction="column"
+          gap="0.25rem"
+          mt="0.5rem"
+          p="0.5rem"
+          style={{
+            border: "1px solid var(--gray-a5)",
+            borderRadius: 6,
+          }}
+        >
+          <Flex align="center" gap="0.5rem">
+            <Text size="2" weight="bold">
+              Embedding environment
+            </Text>
+            <Badge
+              color={
+                venv.exists && venv.healthy
+                  ? "green"
+                  : venv.exists
+                    ? "amber"
+                    : "gray"
+              }
+              variant="soft"
+            >
+              {venv.exists && venv.healthy
+                ? "ready"
+                : venv.exists
+                  ? "broken"
+                  : "missing"}
+            </Badge>
+            {venv.pythonVersion && (
+              <Text size="1" color="gray">
+                {venv.pythonVersion}
+              </Text>
+            )}
+            <Button
+              type="button"
+              size="1"
+              variant="soft"
+              ml="auto"
+              onClick={() => {
+                if (
+                  !venv.exists ||
+                  window.confirm(
+                    "Wipe and reinstall the embedding environment? This will re-download torch + deps and may take several minutes.",
+                  )
+                ) {
+                  rebuildVenv.mutate();
+                }
+              }}
+              disabled={rebuildVenv.isPending}
+            >
+              {rebuildVenv.isPending
+                ? "Rebuilding…"
+                : venv.exists
+                  ? "Rebuild environment"
+                  : "Create environment"}
+            </Button>
+          </Flex>
+          <Text size="1" color="gray">
+            <code>{venv.path}</code>
+          </Text>
+          {venv.error && (
+            <Text size="1" color="red">
+              {venv.error}
+            </Text>
+          )}
+          {rebuildVenv.data && (
+            <Text size="1" color={rebuildVenv.data.ok ? "green" : "red"}>
+              {rebuildVenv.data.message}
+            </Text>
+          )}
+        </Flex>
+      )}
       {depsBanner === "show" && (
         <Callout.Root color="amber" variant="surface" mt="0.5rem">
           <Callout.Icon>
@@ -499,7 +587,8 @@ const SpeakerProfilesPanel: FC = () => {
             )}
           </Button>
           <Text size="1" color="gray">
-            Will run: uv pip install --system resemblyzer librosa numpy
+            Installs torch + resemblyzer into a managed venv at{" "}
+            {venv?.path ?? "<userData>/embed-venv"}
           </Text>
         </Flex>
       )}

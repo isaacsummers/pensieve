@@ -116,97 +116,285 @@ export const removeProfile = async (id: string) => {
   await write(s);
 };
 
-// --- dependency installer --------------------------------------------------
+// --- managed venv + dependency installer ----------------------------------
 
 /**
- * On Windows, webrtcvad (a transitive dep of resemblyzer) requires C++ Build
- * Tools to compile from source and has no pre-built wheel for many Python
- * versions. We work around this by installing resemblyzer with --no-deps and
- * pulling the other required packages separately, skipping webrtcvad entirely.
- * On macOS/Linux, webrtcvad ships pre-built wheels so a normal install works.
+ * The sidecar runs inside its own isolated Python virtual environment under
+ * the app's userData directory. This avoids conflicts with WhisperX's uv
+ * tool environment and any user-level site-packages that might already have
+ * incompatible versions of torch/numpy/decorator/etc. installed.
+ *
+ * All installs target this venv explicitly via `uv pip install --python`,
+ * and the sidecar is invoked with the venv's Python binary — never a bare
+ * `python`/`python3` off PATH.
  */
-const buildInstallAttempts = (): Array<[string, string[]]> => {
-  if (process.platform === "win32") {
-    // Step 1: install core deps without pulling in webrtcvad via resemblyzer's
-    // dependency tree. Step 2: install umap-learn (used internally) normally.
-    // These two commands are run sequentially inside installEmbedDeps.
-    return [
-      [
-        "uv",
-        [
-          "pip",
-          "install",
-          "--system",
-          "numpy",
-          "librosa",
-          "resemblyzer",
-          "--no-deps",
-        ],
-      ],
-    ];
+const venvDir = (): string => path.join(app.getPath("userData"), "embed-venv");
+
+const venvPythonPath = (dir: string = venvDir()): string =>
+  process.platform === "win32"
+    ? path.join(dir, "Scripts", "python.exe")
+    : path.join(dir, "bin", "python");
+
+export type VenvStatus = {
+  path: string;
+  python: string;
+  exists: boolean;
+  healthy: boolean;
+  pythonVersion: string | null;
+  error: string | null;
+};
+
+export const getVenvStatus = async (): Promise<VenvStatus> => {
+  const dir = venvDir();
+  const py = venvPythonPath(dir);
+  const exists = fs.existsSync(py);
+  if (!exists) {
+    return {
+      path: dir,
+      python: py,
+      exists: false,
+      healthy: false,
+      pythonVersion: null,
+      error: null,
+    };
   }
-  // macOS / Linux — webrtcvad has pre-built wheels; install everything normally.
-  return [
-    ["uv", ["pip", "install", "--system", "numpy", "librosa", "resemblyzer"]],
-    ["pip", ["install", "numpy", "librosa", "resemblyzer"]],
-    ["pip3", ["install", "numpy", "librosa", "resemblyzer"]],
-  ];
+  try {
+    const result = await execa(py, ["--version"], {
+      stdio: "pipe",
+      timeout: 10_000,
+      reject: false,
+    });
+    const version = `${result.stdout || ""} ${result.stderr || ""}`.trim();
+    return {
+      path: dir,
+      python: py,
+      exists: true,
+      healthy: result.exitCode === 0,
+      pythonVersion: version || null,
+      error:
+        result.exitCode === 0
+          ? null
+          : `python --version exited ${result.exitCode}`,
+    };
+  } catch (e) {
+    return {
+      path: dir,
+      python: py,
+      exists: true,
+      healthy: false,
+      pythonVersion: null,
+      error: e instanceof Error ? e.message : String(e),
+    };
+  }
+};
+
+/**
+ * Detect whether an NVIDIA CUDA-capable GPU toolchain is available on this
+ * machine. We check for `nvidia-smi` on PATH (runtime driver) and the
+ * CUDA_PATH env var (toolkit installation). Either signal is sufficient to
+ * pick the CUDA torch wheel; otherwise we fall back to the CPU build.
+ */
+const detectCuda = async (): Promise<boolean> => {
+  if (process.env.CUDA_PATH && process.env.CUDA_PATH.trim()) {
+    return true;
+  }
+  try {
+    const result = await execa("nvidia-smi", ["-L"], {
+      stdio: "pipe",
+      timeout: 5_000,
+      reject: false,
+    });
+    return result.exitCode === 0;
+  } catch {
+    return false;
+  }
+};
+
+const torchIndexArgs = (cuda: boolean): string[] =>
+  cuda ? ["--index-url", "https://download.pytorch.org/whl/cu128"] : [];
+
+/**
+ * Create the managed venv if it doesn't already exist. We require `uv` on
+ * PATH — this is a hard prerequisite since the rest of the install flow
+ * uses `uv pip install --python <venv-python>` to target the venv.
+ */
+const ensureVenv = async (): Promise<{
+  ok: boolean;
+  python: string;
+  message?: string;
+}> => {
+  const dir = venvDir();
+  const py = venvPythonPath(dir);
+  if (fs.existsSync(py)) {
+    return { ok: true, python: py };
+  }
+  await fs.ensureDir(path.dirname(dir));
+  log.info(`[speaker-profiles] creating venv at ${dir}`);
+  try {
+    const result = await execa("uv", ["venv", dir, "--python", "3.12"], {
+      stdio: "pipe",
+      timeout: 2 * 60_000,
+      reject: false,
+    });
+    if (result.exitCode !== 0) {
+      return {
+        ok: false,
+        python: py,
+        message: `uv venv failed: ${result.stderr || result.stdout}`,
+      };
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return {
+      ok: false,
+      python: py,
+      message: `uv venv failed to launch (is \`uv\` on PATH?): ${msg}`,
+    };
+  }
+  if (!fs.existsSync(py)) {
+    return {
+      ok: false,
+      python: py,
+      message: `venv created but python not found at ${py}`,
+    };
+  }
+  return { ok: true, python: py };
+};
+
+/** Remove the managed venv directory entirely. Best-effort. */
+export const destroyVenv = async (): Promise<void> => {
+  const dir = venvDir();
+  log.info(`[speaker-profiles] removing venv at ${dir}`);
+  await fs.remove(dir).catch((e) => {
+    log.warn("[speaker-profiles] venv removal failed", e);
+  });
+};
+
+/**
+ * Install all embedding dependencies into the managed venv. This wipes any
+ * prior state via `--reinstall` on the torch step so CUDA/CPU switches and
+ * partial installs don't leave a half-broken environment.
+ *
+ * Platform notes:
+ * - Windows: resemblyzer's transitive `webrtcvad` has no prebuilt wheels for
+ *   most Python versions and requires MSVC to compile. We install
+ *   resemblyzer with --no-deps and substitute `webrtcvad-wheels`, a
+ *   prebuilt-wheel fork that provides the same module.
+ * - Linux/macOS: webrtcvad ships prebuilt wheels on common Python versions,
+ *   so a normal install works. We still pin `webrtcvad-wheels` explicitly
+ *   to keep the dep set identical across platforms.
+ */
+const uvPipInstall = async (
+  python: string,
+  args: string[],
+  timeoutMs = 15 * 60_000,
+) => {
+  const full = ["pip", "install", "--python", python, ...args];
+  log.info(`[speaker-profiles] uv ${full.join(" ")}`);
+  return execa("uv", full, {
+    stdio: "pipe",
+    timeout: timeoutMs,
+    reject: false,
+  });
 };
 
 export const installEmbedDeps = async (): Promise<{
   ok: boolean;
   message: string;
 }> => {
-  log.info("[speaker-profiles] installing embedding deps");
+  log.info("[speaker-profiles] installing embedding deps (venv mode)");
 
   const isWindows = process.platform === "win32";
-  const attempts = buildInstallAttempts();
+  const cuda = await detectCuda();
+  log.info(
+    `[speaker-profiles] GPU detection: ${cuda ? "CUDA (nvidia)" : "CPU"}`,
+  );
 
-  for (const [cmd, args] of attempts) {
-    try {
-      log.info(`[speaker-profiles] trying: ${cmd} ${args.join(" ")}`);
-      const result = await execa(cmd, args, {
-        stdio: "pipe",
-        timeout: 5 * 60_000,
-        reject: false,
-      });
-      if (result.exitCode === 0) {
-        if (isWindows) {
-          // Also install umap-learn which resemblyzer uses internally.
-          log.info(
-            "[speaker-profiles] Windows: installing umap-learn separately",
-          );
-          const umap = await execa(
-            "uv",
-            ["pip", "install", "--system", "umap-learn"],
-            { stdio: "pipe", timeout: 5 * 60_000, reject: false },
-          );
-          if (umap.exitCode !== 0) {
-            log.warn(
-              "[speaker-profiles] umap-learn install failed:",
-              umap.stderr,
-            );
-            // Non-fatal — embedding may still work without umap.
-          }
-        }
-        log.info("[speaker-profiles] dep install succeeded via", cmd);
-        const note = isWindows ? " (without webrtcvad — Windows)" : "";
-        return { ok: true, message: `Installed via ${cmd}${note}` };
-      }
-      log.warn(
-        `[speaker-profiles] ${cmd} exited ${result.exitCode}:`,
-        result.stderr,
-      );
-    } catch (e) {
-      // Command not found — try next.
-      log.warn("[speaker-profiles] dep install attempt failed:", cmd, e);
-    }
+  const venv = await ensureVenv();
+  if (!venv.ok) {
+    return { ok: false, message: venv.message ?? "venv setup failed" };
+  }
+  const py = venv.python;
+
+  // Step 1: torch + torchaudio with the correct wheel index.
+  const torchArgs = torchIndexArgs(cuda);
+  const torch = await uvPipInstall(
+    py,
+    ["torch", "torchaudio", ...torchArgs],
+    15 * 60_000,
+  );
+  if (torch.exitCode !== 0) {
+    return {
+      ok: false,
+      message: `torch install failed: ${torch.stderr || torch.stdout}`,
+    };
   }
 
-  const msg = isWindows
-    ? "Could not install dependencies automatically. Run: uv pip install --system numpy librosa resemblyzer --no-deps"
-    : "Could not install dependencies automatically. Run: pip install numpy librosa resemblyzer";
-  return { ok: false, message: msg };
+  // Step 2: core scientific deps.
+  const core = await uvPipInstall(
+    py,
+    ["numpy", "librosa", "decorator"],
+    10 * 60_000,
+  );
+  if (core.exitCode !== 0) {
+    return {
+      ok: false,
+      message: `core dep install failed: ${core.stderr || core.stdout}`,
+    };
+  }
+
+  // Step 3: resemblyzer without transitive deps, plus our pinned substitutes.
+  const resem = await uvPipInstall(
+    py,
+    ["--no-deps", "resemblyzer"],
+    5 * 60_000,
+  );
+  if (resem.exitCode !== 0) {
+    return {
+      ok: false,
+      message: `resemblyzer install failed: ${resem.stderr || resem.stdout}`,
+    };
+  }
+
+  // webrtcvad-wheels provides the `webrtcvad` module with prebuilt wheels on
+  // every supported platform, avoiding the Windows MSVC requirement.
+  const vad = await uvPipInstall(py, ["webrtcvad-wheels"], 5 * 60_000);
+  if (vad.exitCode !== 0) {
+    return {
+      ok: false,
+      message: `webrtcvad-wheels install failed: ${vad.stderr || vad.stdout}`,
+    };
+  }
+
+  // umap-learn is used internally by resemblyzer; install non-fatally.
+  const umap = await uvPipInstall(py, ["umap-learn"], 5 * 60_000);
+  if (umap.exitCode !== 0) {
+    log.warn(
+      "[speaker-profiles] umap-learn install failed (non-fatal):",
+      umap.stderr,
+    );
+  }
+
+  const note = `torch: ${cuda ? "CUDA 12.8" : "CPU"}${
+    isWindows ? "; webrtcvad-wheels" : ""
+  }`;
+  return {
+    ok: true,
+    message: `Installed into managed venv (${note})`,
+  };
+};
+
+/**
+ * Wipe and recreate the venv from scratch, reinstalling every dep. Used by
+ * the Settings UI "Rebuild environment" button and as the automatic repair
+ * path when the sidecar fails with an import error.
+ */
+export const rebuildEmbedVenv = async (): Promise<{
+  ok: boolean;
+  message: string;
+}> => {
+  await destroyVenv();
+  return installEmbedDeps();
 };
 
 const isMissingModuleError = (message: string): boolean =>
@@ -278,10 +466,25 @@ const resolveScriptPath = async (): Promise<string> => {
   );
 };
 
+/**
+ * Resolve the Python binary to run the sidecar with.
+ *
+ * Priority:
+ *   1. explicit whisperx.embeddings.pythonPath setting (power-user override)
+ *   2. the managed venv at <userData>/embed-venv — ensured to exist
+ *   3. fallback to system python (legacy path, will fail fast with a clear
+ *      install message if the venv can't be created)
+ */
 const resolvePythonCmd = async (): Promise<string> => {
   const s = (await settings.getSettings()).whisperx;
   const explicit = s.embeddings?.pythonPath?.trim();
   if (explicit) return explicit;
+  const py = venvPythonPath();
+  if (fs.existsSync(py)) return py;
+  // Venv is missing — try to create it on the fly. If this fails the caller
+  // will see a clear error and can hit "Rebuild environment" in settings.
+  const venv = await ensureVenv();
+  if (venv.ok) return venv.python;
   if (s.pythonPath && s.pythonPath.trim()) return s.pythonPath.trim();
   return process.platform === "win32" ? "python" : "python3";
 };
@@ -352,29 +555,22 @@ const runSidecar = async (
       stderr.trim().split("\n").slice(-5).join(" | ") ||
       `sidecar exited with code ${result.exitCode}`;
 
-    // Auto-install missing Python deps on first failure, then retry once.
+    // Auto-repair missing Python deps on first failure, then retry once.
+    // A missing module inside the managed venv almost always means the venv
+    // is in a broken/partial state (e.g. cancelled prior install, mid-
+    // upgrade corruption). Wipe and rebuild from scratch rather than
+    // layering more installs onto a bad environment.
     if (opts.autoInstall !== false && isMissingModuleError(errMsg)) {
       log.info(
-        "[speaker-profiles] missing module detected, auto-installing deps",
+        "[speaker-profiles] missing module in venv — rebuilding from scratch",
       );
-
-      const isWebrtcvadError =
-        errMsg.includes("webrtcvad") ||
-        errMsg.includes("Visual C++") ||
-        errMsg.includes("Microsoft Visual C");
-      const statusMsg =
-        isWebrtcvadError && process.platform === "win32"
-          ? "Installing without webrtcvad (Windows)… please wait"
-          : "Installing dependencies… please wait";
-
       await setLastError({
         stage: opts.stage,
-        message: statusMsg,
+        message: "Rebuilding embedding environment… please wait",
       });
-      const install = await installEmbedDeps();
+      const install = await rebuildEmbedVenv();
       if (install.ok) {
-        log.info("[speaker-profiles] deps installed, retrying sidecar");
-        // Retry — pass autoInstall:false to avoid infinite loops.
+        log.info("[speaker-profiles] venv rebuilt, retrying sidecar");
         return runSidecar(args, { ...opts, autoInstall: false });
       }
       // Install failed — fall through to original error.

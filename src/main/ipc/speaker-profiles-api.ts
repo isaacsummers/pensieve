@@ -15,6 +15,10 @@ export const speakerProfilesApi = {
 
   installDeps: async () => profiles.installEmbedDeps(),
 
+  getVenvStatus: async () => profiles.getVenvStatus(),
+
+  rebuildVenv: async () => profiles.rebuildEmbedVenv(),
+
   /**
    * Create or update a speaker profile from a single speaker key on a
    * recording. The recording must already have embeddings attached (produced
