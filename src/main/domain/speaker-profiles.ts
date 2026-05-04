@@ -261,13 +261,16 @@ const ensureVenv = async (): Promise<{
   return { ok: true, python: py };
 };
 
-/** Remove the managed venv directory entirely. Best-effort. */
+/** Remove the managed venv directory entirely. Uses sync removal to guarantee
+ * the directory is gone before any subsequent `uv venv` call proceeds. */
 export const destroyVenv = async (): Promise<void> => {
   const dir = venvDir();
   log.info(`[speaker-profiles] removing venv at ${dir}`);
-  await fs.remove(dir).catch((e) => {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch (e) {
     log.warn("[speaker-profiles] venv removal failed", e);
-  });
+  }
 };
 
 /**
