@@ -4,6 +4,18 @@ import * as whisperx from "../domain/whisperx";
 export const whisperxApi = {
   checkInstalled: async () => whisperx.checkWhisperxAvailability(),
 
+  /**
+   * Surface the most recent Hugging Face 401/403 / gated-repo error seen
+   * while running WhisperX diarization. The settings UI uses this to
+   * render an actionable callout with links to accept pyannote terms and
+   * mint a new HF token. Returns `null` when there is no pending failure.
+   */
+  getHfAuthError: async () => whisperx.getLastHfAuthError(),
+
+  clearHfAuthError: async () => {
+    whisperx.clearLastHfAuthError();
+  },
+
   testTranscriptionPipeline: async (): Promise<{
     ok: boolean;
     whisperx: { ok: boolean; version?: string; error?: string };

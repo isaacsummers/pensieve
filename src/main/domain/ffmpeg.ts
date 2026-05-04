@@ -1,7 +1,7 @@
-import { execa } from "execa";
 import path from "path";
 import os from "os";
 import fs from "fs";
+import { execa } from "execa";
 import { dialog, shell } from "electron";
 import {
   getExtraResourcesFolder,
@@ -64,17 +64,73 @@ const tryVersion = async (
  *
  * On macOS/Linux we check Homebrew / system paths and PATH.
  */
+// Expand any WinGet-installed ffmpeg copies into candidate entries. WinGet
+// drops packages under
+//   %LOCALAPPDATA%\Microsoft\WinGet\Packages\<package-id>\...\ffmpeg.exe
+// with a version-stamped subdirectory in between. We glob the Packages dir
+// for any folder whose name starts with "Gyan.FFmpeg" or "FFmpeg." and look
+// for a nested ffmpeg.exe.
+const expandWinGetCandidates = (): string[] => {
+  if (os.platform() !== "win32") return [];
+  const localAppData = process.env.LOCALAPPDATA;
+  if (!localAppData) return [];
+  const pkgRoot = path.join(localAppData, "Microsoft", "WinGet", "Packages");
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(pkgRoot);
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  for (const name of entries) {
+    if (!/ffmpeg/i.test(name)) {
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+    const pkgDir = path.join(pkgRoot, name);
+    // Shallow-walk one level to find ffmpeg.exe; WinGet nests once under a
+    // version folder (e.g. `ffmpeg-7.0.2-full_build`).
+    let subdirs: string[];
+    try {
+      subdirs = fs.readdirSync(pkgDir);
+    } catch {
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+    for (const sub of subdirs) {
+      const candidate1 = path.join(pkgDir, sub, "bin", "ffmpeg.exe");
+      if (fs.existsSync(candidate1)) out.push(candidate1);
+      const candidate2 = path.join(pkgDir, sub, "ffmpeg.exe");
+      if (fs.existsSync(candidate2)) out.push(candidate2);
+    }
+  }
+  return out;
+};
+
 const buildCandidates = (): Array<{ path: string; source: FfmpegSource }> => {
   if (os.platform() === "win32") {
-    return [
+    const programFiles = process.env.ProgramFiles || "C:\\Program Files";
+    const list: Array<{ path: string; source: FfmpegSource }> = [
       {
         path: path.join(getExtraResourcesFolder(), "ffmpeg.exe"),
         source: "bundled",
       },
       { path: "C:\\ffmpeg\\bin\\ffmpeg.exe", source: "installed" },
       { path: "C:\\ffmpeg\\ffmpeg.exe", source: "installed" },
-      { path: "ffmpeg", source: "path" },
+      {
+        path: path.join(programFiles, "ffmpeg", "bin", "ffmpeg.exe"),
+        source: "installed",
+      },
+      {
+        path: path.join(programFiles, "ffmpeg", "ffmpeg.exe"),
+        source: "installed",
+      },
     ];
+    for (const p of expandWinGetCandidates()) {
+      list.push({ path: p, source: "installed" });
+    }
+    list.push({ path: "ffmpeg", source: "path" });
+    return list;
   }
   return [
     { path: path.join(getExtraResourcesFolder(), "ffmpeg"), source: "bundled" },
@@ -248,7 +304,8 @@ export const adoptExternalFfmpeg = async (
 export const simpleTranscode = async (input: string, output: string) => {
   await ensureFFmpegAvailable();
   const bin = await resolveFfmpegPath();
-  await execa(bin, ["-i", input, "-y", output], {
+  // Route through runner so the call is cancellable via abortAllExecutions().
+  await runner.execute(bin, ["-i", input, "-y", output], {
     stdio: "inherit",
   });
 };
@@ -256,9 +313,14 @@ export const simpleTranscode = async (input: string, output: string) => {
 export const toWavFile = async (input: string, output: string) => {
   await ensureFFmpegAvailable();
   const bin = await resolveFfmpegPath();
-  await execa(bin, ["-i", input, "-ac", "2", "-y", "-ar", "16000", output], {
-    stdio: "inherit",
-  });
+  // Single-input transcode: keep mono. WhisperX downmixes internally, so
+  // duplicating a mono channel to stereo only doubles the input size.
+  // Route through runner so post-process abort can cancel this.
+  await runner.execute(
+    bin,
+    ["-i", input, "-ac", "1", "-y", "-ar", "16000", output],
+    { stdio: "inherit" },
+  );
 };
 
 export const toStereoWavFile = async (
@@ -328,7 +390,8 @@ export const toJoinedFile = async (
       { stdio: "inherit" },
     );
   } else {
-    await execa(bin, ["-i", (input1 ?? input2)!, "-y", output], {
+    // Single-input fallback — route through runner for cancel support.
+    await runner.execute(bin, ["-i", (input1 ?? input2)!, "-y", output], {
       stdio: "inherit",
     });
   }
@@ -344,8 +407,10 @@ export const getDuration = async (input: string) => {
       stdout: "pipe",
     },
   );
+  // Escaped `.` (centiseconds separator) and allow any whitespace (ffmpeg
+  // occasionally tabs this in CI / different locales).
   const match = (stderr || stdout).match(
-    /duration\s*:?\s(\d{2}:\d{2}:\d{2}.\d{2})/i,
+    /duration\s*:?\s+(\d{2}:\d{2}:\d{2}\.\d{2})/i,
   );
   const time = match?.[1];
   if (!time) {

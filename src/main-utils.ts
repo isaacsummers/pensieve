@@ -24,10 +24,16 @@ export const buildArgs = (
         : `--${keyRaw}`;
     if (keyRaw.startsWith("_")) {
       args.push(String(value));
-    } else if (value === null || value === true) {
+    } else if (value === false || value === null || value === undefined) {
+      // Explicit skip: a flag is omitted only if its value is an opt-out
+      // sentinel. Previously this branch used truthiness and would silently
+      // drop `0` or empty strings — a real footgun for numeric flags.
+      if (value === null) {
+        args.push(key);
+      }
+      // false / undefined => NOOP
+    } else if (value === true) {
       args.push(key);
-    } else if (value === false) {
-      // NOOP
     } else {
       args.push(key, String(value));
     }

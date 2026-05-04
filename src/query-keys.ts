@@ -12,4 +12,5 @@ export enum QueryKeys {
   RecorderIpcState = "recorderipcstate",
   SpeakerProfiles = "speakerprofiles",
   SpeakerPipelineStatus = "speakerpipelinestatus",
+  HfAuthError = "hfautherror",
 }

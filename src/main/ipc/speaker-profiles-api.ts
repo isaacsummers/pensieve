@@ -17,6 +17,8 @@ export const speakerProfilesApi = {
 
   getVenvStatus: async () => profiles.getVenvStatus(),
 
+  checkUvAvailable: async () => profiles.checkUvAvailable(),
+
   rebuildVenv: async () => profiles.rebuildEmbedVenv(),
 
   /**

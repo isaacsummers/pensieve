@@ -55,6 +55,13 @@ def _import_deps():
     except Exception as e:
         fail(f"numpy import failed: {e}. Install with `pip install numpy`.")
     try:
+        import soundfile  # noqa: F401
+    except Exception as e:
+        fail(
+            f"soundfile import failed: {e}. "
+            "Install with `pip install soundfile`."
+        )
+    try:
         import librosa  # noqa: F401
     except Exception as e:
         fail(f"librosa import failed: {e}. Install with `pip install librosa`.")
@@ -68,9 +75,12 @@ def _import_deps():
 
 
 def load_audio(path: str, target_sr: int = 16000):
+    """Legacy full-file loader. Retained for mp3 / non-wav inputs where
+    soundfile can't seek natively; the extract path now prefers the
+    streaming `iter_speaker_audio` helper for wav inputs."""
     import librosa
 
-    log("LOAD", f"loading audio: {path}")
+    log("LOAD", f"loading audio (full): {path}")
     t0 = time.time()
     try:
         wav, sr = librosa.load(path, sr=target_sr, mono=True)
@@ -78,6 +88,91 @@ def load_audio(path: str, target_sr: int = 16000):
         fail(f"failed to load audio '{path}': {e}")
     log("LOAD", f"loaded {len(wav)} samples @ {sr} Hz in {time.time()-t0:.2f}s")
     return wav, sr
+
+
+def iter_speaker_audio(path: str, grouped, target_sr: int = 16000):
+    """Yield (speaker_key, concatenated_samples, total_duration_sec) tuples
+    using random-access reads via libsndfile.
+
+    This avoids loading the entire recording into memory — a 3-hour meeting
+    at 16 kHz mono float32 is ~700MB. For each speaker we seek to every
+    span's start sample and read only the samples we need. Streams that
+    soundfile cannot open (e.g. mp3 on systems without libsndfile mp3
+    support) fall back to the librosa full-file loader once, and we slice
+    the in-memory array.
+    """
+    import numpy as np
+    import soundfile as sf
+
+    try:
+        snd = sf.SoundFile(path, mode="r")
+    except Exception as e:
+        log(
+            "LOAD",
+            f"soundfile could not open '{path}' ({e}); "
+            "falling back to librosa full-file decode",
+        )
+        wav_full, sr = load_audio(path, target_sr=target_sr)
+        for speaker, spans in grouped.items():
+            chunks = []
+            total_dur = 0.0
+            for span in spans:
+                s_idx = max(0, int(span["start"] * sr))
+                e_idx = min(len(wav_full), int(span["end"] * sr))
+                if e_idx <= s_idx:
+                    continue
+                chunks.append(wav_full[s_idx:e_idx])
+                total_dur += (e_idx - s_idx) / sr
+            if chunks:
+                yield speaker, np.concatenate(chunks).astype(np.float32), total_dur
+            else:
+                yield speaker, np.zeros(0, dtype=np.float32), 0.0
+        return
+
+    try:
+        native_sr = snd.samplerate
+        channels = snd.channels
+        log(
+            "LOAD",
+            f"opened '{path}' via soundfile: {native_sr} Hz, {channels}ch, "
+            f"{snd.frames} frames",
+        )
+        for speaker, spans in grouped.items():
+            chunks = []
+            total_dur = 0.0
+            for span in spans:
+                start_s = max(0.0, float(span["start"]))
+                end_s = max(start_s, float(span["end"]))
+                s_frame = int(start_s * native_sr)
+                e_frame = min(snd.frames, int(end_s * native_sr))
+                if e_frame <= s_frame:
+                    continue
+                try:
+                    snd.seek(s_frame)
+                    data = snd.read(e_frame - s_frame, dtype="float32")
+                except Exception as e:
+                    log("ERROR", f"soundfile read failed for {speaker}: {e}")
+                    continue
+                if data.ndim == 2:
+                    # Downmix to mono.
+                    data = data.mean(axis=1).astype(np.float32)
+                if native_sr != target_sr:
+                    import librosa
+
+                    data = librosa.resample(
+                        data, orig_sr=native_sr, target_sr=target_sr
+                    )
+                chunks.append(data)
+                total_dur += (e_frame - s_frame) / native_sr
+            if chunks:
+                yield speaker, np.concatenate(chunks).astype(np.float32), total_dur
+            else:
+                yield speaker, np.zeros(0, dtype=np.float32), 0.0
+    finally:
+        try:
+            snd.close()
+        except Exception:
+            pass
 
 
 def group_segments_by_speaker(
@@ -164,7 +259,6 @@ def run_extract(args) -> None:
         fail("no speaker segments found after filtering")
 
     target_sr = 16000
-    wav, sr = load_audio(args.audio, target_sr=target_sr)
 
     log("EMBED", "initialising VoiceEncoder")
     try:
@@ -176,19 +270,11 @@ def run_extract(args) -> None:
     embeddings: Dict[str, List[float]] = {}
     durations: Dict[str, float] = {}
 
-    for speaker, spans in grouped.items():
+    for speaker, concatenated, total_dur in iter_speaker_audio(
+        args.audio, grouped, target_sr=target_sr
+    ):
         try:
-            chunks = []
-            total_dur = 0.0
-            for span in spans:
-                s_idx = max(0, int(span["start"] * sr))
-                e_idx = min(len(wav), int(span["end"] * sr))
-                if e_idx <= s_idx:
-                    continue
-                chunks.append(wav[s_idx:e_idx])
-                total_dur += (e_idx - s_idx) / sr
-
-            if not chunks or total_dur < min_sec:
+            if concatenated.size == 0 or total_dur < min_sec:
                 log(
                     "EMBED",
                     f"skipping speaker {speaker}: only {total_dur:.2f}s of audio "
@@ -196,10 +282,9 @@ def run_extract(args) -> None:
                 )
                 continue
 
-            concatenated = np.concatenate(chunks).astype(np.float32)
             log(
                 "EMBED",
-                f"speaker {speaker}: {len(chunks)} span(s), {total_dur:.2f}s — embedding",
+                f"speaker {speaker}: {total_dur:.2f}s — embedding",
             )
             emb = compute_embedding(encoder, concatenated)
             embeddings[speaker] = [float(x) for x in emb.tolist()]

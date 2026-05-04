@@ -270,12 +270,88 @@ const torchIndexArgs = (cuda: boolean, info?: CudaInfo): string[] => {
 let ensureVenvInFlight: Promise<{
   ok: boolean;
   python: string;
+  uv: boolean;
   message?: string;
 }> | null = null;
+
+/**
+ * Attempt to locate a usable Python interpreter for bootstrapping a venv
+ * when `uv` is unavailable. On Windows the launcher (`py -3`) is the
+ * canonical path and is often present when `python` isn't on PATH.
+ */
+const probeHostPython = async (): Promise<string | null> => {
+  const isWindows = process.platform === "win32";
+  type Candidate = { cmd: string; args: string[] };
+  const candidates: Candidate[] = isWindows
+    ? [
+        { cmd: "py", args: ["-3.12"] },
+        { cmd: "py", args: ["-3"] },
+        { cmd: "py", args: [] },
+        { cmd: "python", args: [] },
+        { cmd: "python3", args: [] },
+      ]
+    : [
+        { cmd: "python3.12", args: [] },
+        { cmd: "python3", args: [] },
+        { cmd: "python", args: [] },
+      ];
+  for (const { cmd, args } of candidates) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const r = await execa(cmd, [...args, "--version"], {
+        stdio: "pipe",
+        timeout: 10_000,
+        reject: false,
+      });
+      if (r.exitCode === 0) {
+        // Join cmd + args into a single invocation string. Callers spawn
+        // this via `execa(combined, [...])` by splitting on spaces; since
+        // neither `py` nor `python` contain spaces this is safe.
+        return [cmd, ...args].join(" ");
+      }
+    } catch {
+      /* next */
+    }
+  }
+  return null;
+};
+
+/**
+ * Check whether `uv` is available on PATH. Cached per call.
+ */
+export const checkUvAvailable = async (): Promise<{
+  ok: boolean;
+  version: string | null;
+  error?: string;
+}> => {
+  try {
+    const r = await execa("uv", ["--version"], {
+      stdio: "pipe",
+      timeout: 5_000,
+      reject: false,
+    });
+    if (r.exitCode === 0) {
+      const v = /uv\s+([\d.]+)/i.exec(r.stdout + r.stderr)?.[1] ?? null;
+      return { ok: true, version: v };
+    }
+    return {
+      ok: false,
+      version: null,
+      error: `uv --version exited ${r.exitCode}`,
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      version: null,
+      error: e instanceof Error ? e.message : String(e),
+    };
+  }
+};
 
 const ensureVenv = async (): Promise<{
   ok: boolean;
   python: string;
+  uv: boolean;
   message?: string;
 }> => {
   if (ensureVenvInFlight) return ensureVenvInFlight;
@@ -283,12 +359,51 @@ const ensureVenv = async (): Promise<{
     const dir = venvDir();
     const py = venvPythonPath(dir);
     if (fs.existsSync(py)) {
-      return { ok: true, python: py };
+      // Detect whether uv is still available so downstream pip installs
+      // can pick the right strategy.
+      const uv = await checkUvAvailable();
+      return { ok: true, python: py, uv: uv.ok };
     }
     await fs.ensureDir(path.dirname(dir));
     log.info(`[speaker-profiles] creating venv at ${dir}`);
+
+    // Strategy 1: uv (fast + manages Python toolchain installs).
+    const uvProbe = await checkUvAvailable();
+    if (uvProbe.ok) {
+      try {
+        const result = await execa("uv", ["venv", dir, "--python", "3.12"], {
+          stdio: "pipe",
+          timeout: 2 * 60_000,
+          reject: false,
+        });
+        if (result.exitCode === 0 && fs.existsSync(py)) {
+          return { ok: true, python: py, uv: true };
+        }
+        log.warn(
+          `[speaker-profiles] uv venv exited ${result.exitCode}, falling back to python -m venv: ${result.stderr || result.stdout}`,
+        );
+      } catch (e) {
+        log.warn(
+          "[speaker-profiles] uv venv failed to launch, falling back:",
+          e,
+        );
+      }
+    }
+
+    // Strategy 2: python -m venv with a host-discovered interpreter.
+    const host = await probeHostPython();
+    if (!host) {
+      return {
+        ok: false,
+        python: py,
+        uv: uvProbe.ok,
+        message:
+          "Could not find `uv` or a usable host Python. Install `uv` (https://docs.astral.sh/uv/getting-started/installation/) or Python 3.10+ and try again.",
+      };
+    }
+    const [hostCmd, ...hostArgs] = host.split(" ");
     try {
-      const result = await execa("uv", ["venv", dir, "--python", "3.12"], {
+      const result = await execa(hostCmd, [...hostArgs, "-m", "venv", dir], {
         stdio: "pipe",
         timeout: 2 * 60_000,
         reject: false,
@@ -297,7 +412,8 @@ const ensureVenv = async (): Promise<{
         return {
           ok: false,
           python: py,
-          message: `uv venv failed: ${result.stderr || result.stdout}`,
+          uv: uvProbe.ok,
+          message: `\`${host} -m venv\` failed: ${result.stderr || result.stdout}`,
         };
       }
     } catch (e) {
@@ -305,17 +421,19 @@ const ensureVenv = async (): Promise<{
       return {
         ok: false,
         python: py,
-        message: `uv venv failed to launch (is \`uv\` on PATH?): ${msg}`,
+        uv: uvProbe.ok,
+        message: `\`${host} -m venv\` failed to launch: ${msg}`,
       };
     }
     if (!fs.existsSync(py)) {
       return {
         ok: false,
         python: py,
+        uv: uvProbe.ok,
         message: `venv created but python not found at ${py}`,
       };
     }
-    return { ok: true, python: py };
+    return { ok: true, python: py, uv: uvProbe.ok };
   })();
   try {
     return await ensureVenvInFlight;
@@ -325,14 +443,35 @@ const ensureVenv = async (): Promise<{
 };
 
 /** Remove the managed venv directory entirely. Uses sync removal to guarantee
- * the directory is gone before any subsequent `uv venv` call proceeds. */
+ * the directory is gone before any subsequent `uv venv` call proceeds.
+ *
+ * Windows-specific: `fs.rmSync` intermittently fails when antivirus is
+ * scanning the venv contents. We retry up to 3 times with a short backoff
+ * before giving up, so the user doesn't hit a phantom failure during
+ * rebuild.
+ */
 export const destroyVenv = async (): Promise<void> => {
   const dir = venvDir();
   log.info(`[speaker-profiles] removing venv at ${dir}`);
-  try {
-    fs.rmSync(dir, { recursive: true, force: true });
-  } catch (e) {
-    log.warn("[speaker-profiles] venv removal failed", e);
+  const attempts = 3;
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+      return;
+    } catch (e) {
+      if (i === attempts - 1) {
+        log.warn("[speaker-profiles] venv removal failed after retries", e);
+        return;
+      }
+      log.info(
+        `[speaker-profiles] venv removal attempt ${i + 1} failed, retrying…`,
+        e,
+      );
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((resolve) => {
+        setTimeout(resolve, 500);
+      });
+    }
   }
 };
 
@@ -354,10 +493,23 @@ const uvPipInstall = async (
   python: string,
   args: string[],
   timeoutMs = 15 * 60_000,
+  useUv = true,
 ) => {
-  const full = ["pip", "install", "--python", python, ...args];
-  log.info(`[speaker-profiles] uv ${full.join(" ")}`);
-  return execa("uv", full, {
+  if (useUv) {
+    const full = ["pip", "install", "--python", python, ...args];
+    log.info(`[speaker-profiles] uv ${full.join(" ")}`);
+    return execa("uv", full, {
+      stdio: "pipe",
+      timeout: timeoutMs,
+      reject: false,
+    });
+  }
+  // Fallback path: invoke the venv's own pip directly. This matters when
+  // `uv` is unavailable on the host (rare but happens on locked-down
+  // corporate machines).
+  const full = ["-m", "pip", "install", ...args];
+  log.info(`[speaker-profiles] ${python} ${full.join(" ")}`);
+  return execa(python, full, {
     stdio: "pipe",
     timeout: timeoutMs,
     reject: false,
@@ -390,6 +542,10 @@ export const installEmbedDeps = async (): Promise<{
     return { ok: false, message: venv.message ?? "venv setup failed" };
   }
   const py = venv.python;
+  const useUv = venv.uv;
+  log.info(
+    `[speaker-profiles] installer strategy: ${useUv ? "uv pip" : "venv pip"}`,
+  );
 
   // Step 1: torch + torchaudio with the correct wheel index. If the CUDA
   // install fails (mismatched driver, 404'd wheel, etc.) fall back to the
@@ -399,6 +555,7 @@ export const installEmbedDeps = async (): Promise<{
     py,
     ["torch", "torchaudio", ...torchArgs],
     15 * 60_000,
+    useUv,
   );
   let usedCpuFallback = false;
   if (torch.exitCode !== 0 && cuda) {
@@ -410,6 +567,7 @@ export const installEmbedDeps = async (): Promise<{
       py,
       ["--reinstall", "torch", "torchaudio"],
       15 * 60_000,
+      useUv,
     );
     usedCpuFallback = true;
   }
@@ -420,11 +578,14 @@ export const installEmbedDeps = async (): Promise<{
     };
   }
 
-  // Step 2: core scientific deps.
+  // Step 2: core scientific deps. `soundfile` lets the sidecar do
+  // random-access per-segment reads instead of decoding the entire file
+  // into RAM via librosa.
   const core = await uvPipInstall(
     py,
-    ["numpy", "librosa", "decorator"],
+    ["numpy", "librosa", "soundfile", "decorator"],
     10 * 60_000,
+    useUv,
   );
   if (core.exitCode !== 0) {
     return {
@@ -438,6 +599,7 @@ export const installEmbedDeps = async (): Promise<{
     py,
     ["--no-deps", "resemblyzer"],
     5 * 60_000,
+    useUv,
   );
   if (resem.exitCode !== 0) {
     return {
@@ -448,7 +610,7 @@ export const installEmbedDeps = async (): Promise<{
 
   // webrtcvad-wheels provides the `webrtcvad` module with prebuilt wheels on
   // every supported platform, avoiding the Windows MSVC requirement.
-  const vad = await uvPipInstall(py, ["webrtcvad-wheels"], 5 * 60_000);
+  const vad = await uvPipInstall(py, ["webrtcvad-wheels"], 5 * 60_000, useUv);
   if (vad.exitCode !== 0) {
     return {
       ok: false,
@@ -457,7 +619,7 @@ export const installEmbedDeps = async (): Promise<{
   }
 
   // umap-learn is used internally by resemblyzer; install non-fatally.
-  const umap = await uvPipInstall(py, ["umap-learn"], 5 * 60_000);
+  const umap = await uvPipInstall(py, ["umap-learn"], 5 * 60_000, useUv);
   if (umap.exitCode !== 0) {
     log.warn(
       "[speaker-profiles] umap-learn install failed (non-fatal):",
@@ -581,7 +743,26 @@ const resolvePythonCmd = async (): Promise<string> => {
   const venv = await ensureVenv();
   if (venv.ok) return venv.python;
   if (s.pythonPath && s.pythonPath.trim()) return s.pythonPath.trim();
-  return process.platform === "win32" ? "python" : "python3";
+  // Last-ditch fallback when the venv can't be created and no explicit
+  // interpreter is configured. On Windows, the launcher `py` is the
+  // canonical path and is often present when `python` isn't on PATH.
+  if (process.platform === "win32") {
+    for (const candidate of ["py", "python", "python3"]) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const r = await execa(candidate, ["--version"], {
+          stdio: "pipe",
+          timeout: 5_000,
+          reject: false,
+        });
+        if (r.exitCode === 0) return candidate;
+      } catch {
+        /* next */
+      }
+    }
+    return "python";
+  }
+  return "python3";
 };
 
 export type SidecarResult = {
@@ -718,7 +899,7 @@ export const extractEmbeddings = async (params: {
   try {
     const result = (await runSidecar(
       ["--audio", params.audioPath, "--segments", tmpSeg],
-      { stage: "embed" },
+      { stage: "embed", timeoutMs: 15 * 60_000 },
     )) as SidecarResult;
     await setLastError(null);
     return result;

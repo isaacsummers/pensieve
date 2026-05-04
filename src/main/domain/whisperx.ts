@@ -11,6 +11,19 @@ import * as speakerProfiles from "./speaker-profiles";
 import { getSettings } from "./settings";
 import { RecordingTranscript } from "../../types";
 
+// --- Transcript transform ----------------------------------------------------
+//
+// The pure helpers (toHms, normalizeSpeaker, whisperxToTranscript) live in
+// `./whisperx-utils` so they can be unit-tested under plain Node without
+// loading electron. Re-export them here to keep the public module surface
+// stable for existing callers.
+import {
+  type WhisperxJson,
+  normalizeSpeaker as _normalizeSpeaker,
+  toHms as _toHms,
+  whisperxToTranscript as _whisperxToTranscript,
+} from "./whisperx-utils";
+
 // --- Availability / setup helpers --------------------------------------------
 
 type WhisperxSettings = Awaited<ReturnType<typeof getSettings>>["whisperx"];
@@ -105,56 +118,60 @@ const ensureWhisperxAvailable = async (): Promise<void> => {
   }
 };
 
-// --- Transcript transform ----------------------------------------------------
+// --- HF auth error surfacing -------------------------------------------------
+//
+// When diarization is enabled and the HF token is missing / invalid,
+// pyannote returns 401/403 from Hugging Face. We scan the WhisperX stderr
+// stream for those signals and expose them via an IPC-queryable state so
+// the settings UI can surface a clear call-to-action (accept pyannote
+// terms, mint a token).
 
-const pad = (n: number, w = 2) => String(n).padStart(w, "0");
+export type HfAuthErrorState = {
+  at: string;
+  reason: string;
+  detail: string;
+} | null;
 
-export const toHms = (seconds: number): string => {
-  const ms = Math.max(0, Math.round(seconds * 1000));
-  const h = Math.floor(ms / 3_600_000);
-  const m = Math.floor((ms % 3_600_000) / 60_000);
-  const s = Math.floor((ms % 60_000) / 1000);
-  const r = ms % 1000;
-  return `${pad(h)}:${pad(m)}:${pad(s)}.${pad(r, 3)}`;
+let lastHfAuthError: HfAuthErrorState = null;
+
+export const getLastHfAuthError = (): HfAuthErrorState => lastHfAuthError;
+
+export const clearLastHfAuthError = (): void => {
+  lastHfAuthError = null;
 };
 
-export const normalizeSpeaker = (label?: unknown): string => {
-  if (typeof label !== "string" || !label) return "0";
-  const match = /(\d+)/.exec(label);
-  return match ? String(parseInt(match[1], 10)) : "0";
+const detectHfAuthFailure = (
+  text: string,
+): { reason: string; detail: string } | null => {
+  // Common shapes seen in pyannote / huggingface_hub errors:
+  //   "401 Client Error", "HTTP Error 401", "GatedRepoError",
+  //   "is not authorized to access", "Invalid user token".
+  if (/\b401\b/.test(text) || /\b403\b/.test(text)) {
+    const line = text
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .find((l) => /401|403/.test(l));
+    return {
+      reason: /403/.test(text) ? "forbidden" : "unauthorized",
+      detail: line ?? text.slice(0, 500),
+    };
+  }
+  if (
+    /GatedRepoError|accept the (pyannote )?terms|is not authorized to access|Invalid user token/i.test(
+      text,
+    )
+  ) {
+    return {
+      reason: "gated",
+      detail: text.slice(0, 500),
+    };
+  }
+  return null;
 };
 
-type WhisperxSegment = {
-  start?: number;
-  end?: number;
-  text?: string;
-  speaker?: string;
-};
-
-type WhisperxJson = {
-  segments?: WhisperxSegment[];
-  language?: string;
-};
-
-export const whisperxToTranscript = (wx: WhisperxJson): RecordingTranscript => {
-  const segments = Array.isArray(wx.segments) ? wx.segments : [];
-  return {
-    result: { language: wx.language ?? "auto" },
-    transcription: segments.map((s) => {
-      const start = typeof s.start === "number" ? s.start : 0;
-      const end = typeof s.end === "number" ? s.end : start;
-      return {
-        timestamps: { from: toHms(start), to: toHms(end) },
-        offsets: {
-          from: Math.round(start * 1000),
-          to: Math.round(end * 1000),
-        },
-        text: String(s.text ?? "").trim(),
-        speaker: normalizeSpeaker(s.speaker),
-      };
-    }),
-  };
-};
+export const toHms = _toHms;
+export const normalizeSpeaker = _normalizeSpeaker;
+export const whisperxToTranscript = _whisperxToTranscript;
 
 // --- Main entry point --------------------------------------------------------
 
@@ -215,12 +232,53 @@ export const processWavFile = async (
   const proc = runner.execute(cmd, fullArgs);
 
   let lastTqdmPct = 0;
+  // Model download is surfaced as a distinct "modelDownload" step because
+  // the first transcription pulls ~1GB with no other user feedback.
+  // faster-whisper / huggingface_hub emit messages like
+  //   "Downloading model.bin: 13%|..." or
+  //   "Downloading (…) model.safetensors: 42%|..."
+  // on stderr before transcription actually starts.
+  let inModelDownload = false;
+  let downloadPct = 0;
   const onChunk = (data: Buffer | string) => {
     const text = data.toString();
+
+    // Capture HF auth errors as they stream in so we can surface them even
+    // if WhisperX exits non-zero before we reach the parse step below.
+    const auth = detectHfAuthFailure(text);
+    if (auth) {
+      lastHfAuthError = {
+        at: new Date().toISOString(),
+        reason: auth.reason,
+        detail: auth.detail,
+      };
+    }
+
+    // Model-download progress. The message distinguishes itself from
+    // transcription progress via the word "Download". We pin modelDownload
+    // progress to a separate step so the UI can render a dedicated spinner.
+    const dlMatch = /Downloading[^\n]*?(\d{1,3})%/g.exec(text);
+    if (dlMatch || /\bDownloading\b/.test(text)) {
+      inModelDownload = true;
+      if (dlMatch) {
+        const pct = parseInt(dlMatch[1], 10);
+        if (pct >= downloadPct) {
+          downloadPct = pct;
+          postprocess.setProgress("modelDownload", Math.min(1, pct / 100));
+        }
+      }
+      return;
+    }
 
     // tqdm progress bars (written to stderr by WhisperX / faster-whisper).
     const pctMatches = Array.from(text.matchAll(/(\d{1,3})%\|/g));
     if (pctMatches.length > 0) {
+      // Once we see a non-download tqdm bar, the model is loaded; any
+      // further percentages belong to transcription.
+      if (inModelDownload && downloadPct < 100) {
+        postprocess.setProgress("modelDownload", 1);
+      }
+      inModelDownload = false;
       const highest = Math.max(...pctMatches.map((m) => parseInt(m[1], 10)));
       if (highest >= lastTqdmPct) {
         lastTqdmPct = highest;
@@ -242,7 +300,28 @@ export const processWavFile = async (
   };
   proc.stdout?.on("data", onChunk);
   proc.stderr?.on("data", onChunk);
-  await proc;
+  try {
+    await proc;
+  } catch (e) {
+    // If we detected an HF 401/403 during this run, augment the thrown
+    // error so the UI can surface the "accept pyannote terms / mint token"
+    // flow without digging through stderr.
+    if (lastHfAuthError) {
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new Error(
+        `WhisperX diarization failed with a Hugging Face ${lastHfAuthError.reason} error. ` +
+          `Accept the pyannote terms and provide a valid HF read token in settings. ` +
+          `Underlying: ${msg}`,
+      );
+    }
+    throw e;
+  }
+  // Only clear the auth error on a fully successful run. This way a
+  // subsequent settings-panel query can still see the last auth failure
+  // until the user fixes the token and runs again.
+  if (settings.diarize && settings.hfToken.trim()) {
+    lastHfAuthError = null;
+  }
 
   // WhisperX writes <basename-without-ext>.json into --output_dir.
   const wxJsonPath = path.join(
@@ -268,16 +347,18 @@ export const processWavFile = async (
 
   const rawSegments = Array.isArray(wx.segments) ? wx.segments : [];
   const segments = rawSegments
+    .map((s) => ({ raw: s, speaker: normalizeSpeaker(s.speaker) }))
     .filter(
-      (s) =>
-        typeof s.start === "number" &&
-        typeof s.end === "number" &&
-        s.end > s.start,
+      ({ raw, speaker }) =>
+        speaker !== null &&
+        typeof raw.start === "number" &&
+        typeof raw.end === "number" &&
+        (raw.end as number) > (raw.start as number),
     )
-    .map((s) => ({
-      speaker: normalizeSpeaker(s.speaker),
-      start: s.start as number,
-      end: s.end as number,
+    .map(({ raw, speaker }) => ({
+      speaker: speaker as string,
+      start: raw.start as number,
+      end: raw.end as number,
     }));
 
   log.info("Processed WAV file via WhisperX");

@@ -122,43 +122,50 @@ const doWhisperStep = async (job: PostProcessingJob) => {
 
   const model = await models.prepareConfiguredModel();
 
-  const { segments } = await whisperx.processWavFile(
-    wav,
-    path.join(recordingsFolder, job.recordingId, "transcript.json"),
-    model,
-  );
-
-  // Run the speaker embedding + profile-matching pipeline. We prefer the
-  // 16kHz mono/stereo wav we just transcribed against: soundfile/libsndfile
-  // reads it directly without shelling out to ffmpeg, which matters on
-  // Windows where the bundled ffmpeg isn't on PATH for the sidecar's
-  // librosa/audioread fallback. The mp3 is only used if the wav is already
-  // gone (post-processing re-entry).
   try {
-    const audioForEmbedding = fs.existsSync(wav) ? wav : mp3;
-    if (fs.existsSync(audioForEmbedding) && segments.length > 0) {
-      const embed = await whisperx.runSpeakerEmbeddingPipeline({
-        recordingId: job.recordingId,
-        audioPath: audioForEmbedding,
-        segments,
-      });
-      // Merge into meta so the UI can see matches/errors without re-running.
+    const { segments } = await whisperx.processWavFile(
+      wav,
+      path.join(recordingsFolder, job.recordingId, "transcript.json"),
+      model,
+    );
+
+    // Run the speaker embedding + profile-matching pipeline. We prefer the
+    // 16kHz mono/stereo wav we just transcribed against: soundfile/libsndfile
+    // reads it directly without shelling out to ffmpeg, which matters on
+    // Windows where the bundled ffmpeg isn't on PATH for the sidecar's
+    // librosa/audioread fallback. The mp3 is only used if the wav is already
+    // gone (post-processing re-entry).
+    try {
+      const audioForEmbedding = fs.existsSync(wav) ? wav : mp3;
+      if (fs.existsSync(audioForEmbedding) && segments.length > 0) {
+        const embed = await whisperx.runSpeakerEmbeddingPipeline({
+          recordingId: job.recordingId,
+          audioPath: audioForEmbedding,
+          segments,
+        });
+        // Merge into meta so the UI can see matches/errors without re-running.
+        await history.updateRecording(job.recordingId, {
+          speakerEmbeddings: embed.speakerEmbeddings,
+          speakerMatches: embed.speakerMatches,
+          speakerNames: embed.speakerNames,
+          pipelineError: embed.pipelineError ?? null,
+        });
+      }
+    } catch (e) {
+      // Last-ditch: never let embeddings crash the whisper step.
+      const message = e instanceof Error ? e.message : String(e);
       await history.updateRecording(job.recordingId, {
-        speakerEmbeddings: embed.speakerEmbeddings,
-        speakerMatches: embed.speakerMatches,
-        speakerNames: embed.speakerNames,
-        pipelineError: embed.pipelineError ?? null,
+        pipelineError: { stage: "embed", message },
       });
     }
-  } catch (e) {
-    // Last-ditch: never let embeddings crash the whisper step.
-    const message = e instanceof Error ? e.message : String(e);
-    await history.updateRecording(job.recordingId, {
-      pipelineError: { stage: "embed", message },
-    });
+  } finally {
+    // Always drop the intermediate wav, even if transcription or the
+    // embedding step threw. Leaving it behind wastes disk and confuses
+    // re-runs. `fs.rm` tolerates a missing path (force: true).
+    if (fs.existsSync(wav)) {
+      await fs.rm(wav, { force: true }).catch(() => {});
+    }
   }
-
-  await fs.rm(wav);
 };
 
 const doSummaryStep = async (job: PostProcessingJob) => {

@@ -218,6 +218,8 @@ export const WhisperSettings: FC = () => {
       <Heading mt="2rem" size="4">
         Diarization
       </Heading>
+      {/* eslint-disable-next-line @typescript-eslint/no-use-before-define */}
+      <HfAuthErrorPanel />
       <SettingsSwitchField
         form={form}
         field="whisperx.diarize"
@@ -319,6 +321,98 @@ export const WhisperSettings: FC = () => {
         description="Run the wav2vec alignment pass. Disable to save time if you do not need word-level timestamps."
       />
     </Tabs.Content>
+  );
+};
+
+const HfAuthErrorPanel: FC = () => {
+  const qc = useQueryClient();
+  const { data: hfError } = useQuery({
+    queryKey: [QueryKeys.HfAuthError],
+    queryFn: whisperxApi.getHfAuthError,
+    refetchInterval: 5000,
+  });
+  const dismiss = useMutation({
+    mutationFn: whisperxApi.clearHfAuthError,
+    onSettled: () =>
+      qc.invalidateQueries({ queryKey: [QueryKeys.HfAuthError] }),
+  });
+
+  if (!hfError) return null;
+
+  const reasonLabel =
+    hfError.reason === "forbidden"
+      ? "Hugging Face 403 Forbidden"
+      : hfError.reason === "gated"
+        ? "Pyannote gated model — terms not accepted"
+        : "Hugging Face 401 Unauthorized";
+
+  return (
+    <Callout.Root color="red" variant="surface" mt="0.5rem">
+      <Callout.Icon>
+        <HiOutlineXCircle />
+      </Callout.Icon>
+      <Callout.Text>
+        <Text as="p" weight="bold" size="2">
+          {reasonLabel}
+        </Text>
+        <Text as="p" size="2">
+          WhisperX diarization could not authenticate with Hugging Face. To
+          enable diarization you need to (1) accept the pyannote model terms,
+          (2) generate a read token, and (3) paste it below.
+        </Text>
+        <Flex gap="0.5rem" mt="0.5rem" wrap="wrap">
+          <Button
+            type="button"
+            size="1"
+            variant="soft"
+            onClick={() =>
+              mainApi.openWeb(
+                "https://huggingface.co/pyannote/speaker-diarization-3.1",
+              )
+            }
+          >
+            <GoLinkExternal /> Accept pyannote/speaker-diarization-3.1
+          </Button>
+          <Button
+            type="button"
+            size="1"
+            variant="soft"
+            onClick={() =>
+              mainApi.openWeb(
+                "https://huggingface.co/pyannote/segmentation-3.0",
+              )
+            }
+          >
+            <GoLinkExternal /> Accept pyannote/segmentation-3.0
+          </Button>
+          <Button
+            type="button"
+            size="1"
+            variant="soft"
+            color="green"
+            onClick={() =>
+              mainApi.openWeb("https://huggingface.co/settings/tokens")
+            }
+          >
+            <GoLinkExternal /> Get token
+          </Button>
+          <Button
+            type="button"
+            size="1"
+            variant="ghost"
+            onClick={() => dismiss.mutate()}
+            disabled={dismiss.isPending}
+          >
+            Dismiss
+          </Button>
+        </Flex>
+        {hfError.detail && (
+          <Text as="p" size="1" color="gray" mt="0.25rem">
+            {hfError.detail}
+          </Text>
+        )}
+      </Callout.Text>
+    </Callout.Root>
   );
 };
 
@@ -426,6 +520,11 @@ const SpeakerProfilesPanel: FC = () => {
     queryFn: speakerProfilesApi.getVenvStatus,
     refetchInterval: 10_000,
   });
+  const { data: uv } = useQuery({
+    queryKey: [QueryKeys.SpeakerPipelineStatus, "uv"],
+    queryFn: speakerProfilesApi.checkUvAvailable,
+    refetchInterval: 30_000,
+  });
   const rebuildVenv = useMutation({
     mutationFn: speakerProfilesApi.rebuildVenv,
     onSettled: () => {
@@ -448,6 +547,51 @@ const SpeakerProfilesPanel: FC = () => {
 
   return (
     <>
+      {venv && (
+        <Flex
+          direction="column"
+          gap="0.25rem"
+          mt="0.5rem"
+          p="0.5rem"
+          style={{
+            border: "1px solid var(--gray-a5)",
+            borderRadius: 6,
+          }}
+        >
+          <Flex align="center" gap="0.5rem">
+            <Text size="2" weight="bold">
+              uv package manager
+            </Text>
+            <Badge color={uv?.ok ? "green" : "amber"} variant="soft">
+              {uv?.ok
+                ? `ready${uv.version ? ` (v${uv.version})` : ""}`
+                : "missing"}
+            </Badge>
+            {!uv?.ok && (
+              <Button
+                type="button"
+                size="1"
+                variant="soft"
+                ml="auto"
+                onClick={() =>
+                  mainApi.openWeb(
+                    "https://docs.astral.sh/uv/getting-started/installation/",
+                  )
+                }
+              >
+                <GoLinkExternal /> Install uv
+              </Button>
+            )}
+          </Flex>
+          {!uv?.ok && (
+            <Text size="1" color="gray">
+              `uv` speeds up dependency installs significantly. Pensieve falls
+              back to `python -m venv` + `pip` when `uv` is not on PATH, but
+              installs will be slower.
+            </Text>
+          )}
+        </Flex>
+      )}
       {venv && (
         <Flex
           direction="column"
