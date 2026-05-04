@@ -194,7 +194,9 @@ export const processWavFile = async (
 
   const { cmd, prefix } = getCommand(settings);
   const fullArgs = [...prefix, ...args];
-  log.info("Running WhisperX", cmd, fullArgs);
+  log.info(
+    `Running WhisperX: ${cmd} ${fullArgs.map((a) => (/\s/.test(a) ? JSON.stringify(a) : a)).join(" ")}`,
+  );
 
   const proc = runner.execute(cmd, fullArgs);
 
@@ -234,8 +236,15 @@ export const processWavFile = async (
     `${path.basename(input, path.extname(input))}.json`,
   );
   if (!fs.existsSync(wxJsonPath)) {
+    let contents: string[] = [];
+    try {
+      contents = await fs.readdir(outDir);
+    } catch {
+      // ignore
+    }
     throw new Error(
-      `WhisperX finished but did not produce expected JSON at ${wxJsonPath}`,
+      `WhisperX finished but did not produce expected JSON at ${wxJsonPath}. ` +
+        `Output dir contains: [${contents.join(", ")}]`,
     );
   }
   const wx = (await fs.readJSON(wxJsonPath)) as WhisperxJson;

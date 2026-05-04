@@ -17,7 +17,11 @@ export const buildArgs = (
 ) => {
   const args: string[] = [];
   for (const [keyRaw, value] of Object.entries(argMap)) {
-    const key = keyRaw.startsWith("-") ? keyRaw : `-${keyRaw}`;
+    const key = keyRaw.startsWith("-")
+      ? keyRaw
+      : keyRaw.length === 1
+        ? `-${keyRaw}`
+        : `--${keyRaw}`;
     if (keyRaw.startsWith("_")) {
       args.push(String(value));
     } else if (value === null || value === true) {
