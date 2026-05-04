@@ -141,20 +141,6 @@ export const FfmpegSettings: FC = () => {
           files will be removed. Disable to allow re-processing
           recordings afterwards with different settings."
       />
-
-      <SettingsTextField
-        label="FFMPEG Filter for Whisper-input"
-        description="The FFMPEG complex audio filter applied to the
-          input file of whisper."
-        {...form.register("ffmpeg.stereoWavFilter")}
-      />
-
-      <SettingsTextField
-        label="FFMPEG Filter for MP3 creation"
-        description="The FFMPEG complex audio filter to the creation
-          of MP3 recordings."
-        {...form.register("ffmpeg.mp3Filter")}
-      />
     </Tabs.Content>
   );
 };

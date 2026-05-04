@@ -128,10 +128,14 @@ const doWhisperStep = async (job: PostProcessingJob) => {
     model,
   );
 
-  // Run the speaker embedding + profile-matching pipeline against the mp3
-  // (which is already downmixed/joined) or the wav if the mp3 step ran last.
+  // Run the speaker embedding + profile-matching pipeline. We prefer the
+  // 16kHz mono/stereo wav we just transcribed against: soundfile/libsndfile
+  // reads it directly without shelling out to ffmpeg, which matters on
+  // Windows where the bundled ffmpeg isn't on PATH for the sidecar's
+  // librosa/audioread fallback. The mp3 is only used if the wav is already
+  // gone (post-processing re-entry).
   try {
-    const audioForEmbedding = fs.existsSync(mp3) ? mp3 : wav;
+    const audioForEmbedding = fs.existsSync(wav) ? wav : mp3;
     if (fs.existsSync(audioForEmbedding) && segments.length > 0) {
       const embed = await whisperx.runSpeakerEmbeddingPipeline({
         recordingId: job.recordingId,

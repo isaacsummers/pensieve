@@ -161,6 +161,8 @@ const showFFmpegWarning = async () => {
 // directly to see fresh state after a "Use existing" / "Download" action.
 let cachedPath: string | null = null;
 let cachedStatus: FfmpegStatus | null = null;
+let ffmpegChecked = false;
+let ffmpegCheckInFlight: Promise<void> | null = null;
 
 const resolveFfmpegPath = async (): Promise<string> => {
   if (cachedPath) return cachedPath;
@@ -173,24 +175,37 @@ const resolveFfmpegPath = async (): Promise<string> => {
 export const invalidateFfmpegCache = () => {
   cachedPath = null;
   cachedStatus = null;
+  // Re-arm the one-time availability check so a subsequent call re-detects
+  // (including re-firing the macOS install dialog if the new path is bad).
+  ffmpegChecked = false;
+  ffmpegCheckInFlight = null;
 };
 
 export const getCachedFfmpegStatus = (): FfmpegStatus | null => cachedStatus;
 
-// Initialize FFmpeg check on module load
-let ffmpegChecked = false;
-const ensureFFmpegAvailable = async () => {
-  if (ffmpegChecked) {
+// Initialize FFmpeg check on module load. We share the in-flight promise so
+// concurrent callers don't double-run detection, and we only mark the check
+// as complete once it actually resolves — so a thrown check doesn't
+// permanently poison subsequent callers.
+const ensureFFmpegAvailable = async (): Promise<void> => {
+  if (ffmpegChecked) return;
+  if (ffmpegCheckInFlight) {
+    await ffmpegCheckInFlight;
     return;
   }
-  ffmpegChecked = true;
-
-  const status = await detectFfmpeg();
-  cachedStatus = status;
-  cachedPath = status.ok && status.path ? status.path : "ffmpeg";
-
-  if (!status.ok && os.platform() === "darwin") {
-    await showFFmpegWarning();
+  ffmpegCheckInFlight = (async () => {
+    const status = await detectFfmpeg();
+    cachedStatus = status;
+    cachedPath = status.ok && status.path ? status.path : "ffmpeg";
+    if (!status.ok && os.platform() === "darwin") {
+      await showFFmpegWarning();
+    }
+    ffmpegChecked = true;
+  })();
+  try {
+    await ffmpegCheckInFlight;
+  } finally {
+    ffmpegCheckInFlight = null;
   }
 };
 
@@ -253,6 +268,17 @@ export const toStereoWavFile = async (
 ) => {
   await ensureFFmpegAvailable();
   const bin = await resolveFfmpegPath();
+  // Normalize both input streams to a stereo layout *before* merging so the
+  // downstream pan mapping (which references c0..c3) always has four source
+  // channels to pull from. Without this, a mono + stereo pairing silently
+  // produces wrong audio because `c2`/`c3` do not exist on the mono side.
+  // The hardcoded filter mirrors the fix applied to `toJoinedFile`.
+  const filter =
+    "[0:a]aformat=channel_layouts=stereo[a0];" +
+    "[1:a]aformat=channel_layouts=stereo[a1];" +
+    "[a0][a1]amerge=inputs=2," +
+    "pan=stereo|c0<c0+c1|c1<c2+c3," +
+    "highpass=f=300,lowpass=f=3000[a]";
   await runner.execute(
     bin,
     [
@@ -261,7 +287,7 @@ export const toStereoWavFile = async (
       "-i",
       input2,
       "-filter_complex",
-      (await settings.getSettings()).ffmpeg.stereoWavFilter,
+      filter,
       "-map",
       "[a]",
       "-ar",

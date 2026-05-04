@@ -193,72 +193,135 @@ export const getVenvStatus = async (): Promise<VenvStatus> => {
  * machine. We check for `nvidia-smi` on PATH (runtime driver) and the
  * CUDA_PATH env var (toolkit installation). Either signal is sufficient to
  * pick the CUDA torch wheel; otherwise we fall back to the CPU build.
+ *
+ * When the driver is present we also parse its reported CUDA runtime
+ * version so we can pick a matching PyTorch wheel index instead of
+ * hardcoding `cu128` — mismatched CUDA/PyTorch pairs either fail to load
+ * or crash on first kernel launch.
  */
-const detectCuda = async (): Promise<boolean> => {
-  if (process.env.CUDA_PATH && process.env.CUDA_PATH.trim()) {
-    return true;
-  }
+type CudaInfo = {
+  present: boolean;
+  major: number | null;
+  minor: number | null;
+};
+
+const detectCudaInfo = async (): Promise<CudaInfo> => {
+  const none: CudaInfo = { present: false, major: null, minor: null };
+  let present = false;
+  let versionText = "";
   try {
-    const result = await execa("nvidia-smi", ["-L"], {
+    const r = await execa("nvidia-smi", [], {
       stdio: "pipe",
       timeout: 5_000,
       reject: false,
     });
-    return result.exitCode === 0;
+    if (r.exitCode === 0) {
+      present = true;
+      versionText = `${r.stdout || ""}\n${r.stderr || ""}`;
+    }
   } catch {
-    return false;
+    /* nvidia-smi missing */
   }
+  if (!present && process.env.CUDA_PATH && process.env.CUDA_PATH.trim()) {
+    present = true;
+  }
+  if (!present) return none;
+
+  // nvidia-smi prints e.g. "CUDA Version: 12.4" in its header.
+  const m = /CUDA\s+Version\s*:\s*(\d+)\.(\d+)/i.exec(versionText);
+  if (m) {
+    return { present: true, major: Number(m[1]), minor: Number(m[2]) };
+  }
+  return { present: true, major: null, minor: null };
 };
 
-const torchIndexArgs = (cuda: boolean): string[] =>
-  cuda ? ["--index-url", "https://download.pytorch.org/whl/cu128"] : [];
+/**
+ * Map the detected CUDA runtime version to the closest PyTorch wheel
+ * channel. PyTorch publishes a small set of indexes (cu121, cu124, cu128
+ * at time of writing); we clamp to the highest channel <= driver version.
+ * If we can't parse a version we pick cu121 as the conservative floor,
+ * which works on virtually all drivers that ship CUDA 12.x.
+ */
+const pickCudaChannel = (info: CudaInfo): string => {
+  if (info.major == null) return "cu121";
+  const key = info.major * 100 + (info.minor ?? 0);
+  if (key >= 1208) return "cu128";
+  if (key >= 1204) return "cu124";
+  if (key >= 1201) return "cu121";
+  return "cu121";
+};
+
+const torchIndexArgs = (cuda: boolean, info?: CudaInfo): string[] => {
+  if (!cuda) return [];
+  const channel = pickCudaChannel(
+    info ?? { present: true, major: null, minor: null },
+  );
+  return ["--index-url", `https://download.pytorch.org/whl/${channel}`];
+};
 
 /**
  * Create the managed venv if it doesn't already exist. We require `uv` on
  * PATH — this is a hard prerequisite since the rest of the install flow
  * uses `uv pip install --python <venv-python>` to target the venv.
+ *
+ * A module-level mutex guards against concurrent `uv venv` invocations
+ * racing against the same directory, which is undefined behavior.
  */
+let ensureVenvInFlight: Promise<{
+  ok: boolean;
+  python: string;
+  message?: string;
+}> | null = null;
+
 const ensureVenv = async (): Promise<{
   ok: boolean;
   python: string;
   message?: string;
 }> => {
-  const dir = venvDir();
-  const py = venvPythonPath(dir);
-  if (fs.existsSync(py)) {
-    return { ok: true, python: py };
-  }
-  await fs.ensureDir(path.dirname(dir));
-  log.info(`[speaker-profiles] creating venv at ${dir}`);
-  try {
-    const result = await execa("uv", ["venv", dir, "--python", "3.12"], {
-      stdio: "pipe",
-      timeout: 2 * 60_000,
-      reject: false,
-    });
-    if (result.exitCode !== 0) {
+  if (ensureVenvInFlight) return ensureVenvInFlight;
+  ensureVenvInFlight = (async () => {
+    const dir = venvDir();
+    const py = venvPythonPath(dir);
+    if (fs.existsSync(py)) {
+      return { ok: true, python: py };
+    }
+    await fs.ensureDir(path.dirname(dir));
+    log.info(`[speaker-profiles] creating venv at ${dir}`);
+    try {
+      const result = await execa("uv", ["venv", dir, "--python", "3.12"], {
+        stdio: "pipe",
+        timeout: 2 * 60_000,
+        reject: false,
+      });
+      if (result.exitCode !== 0) {
+        return {
+          ok: false,
+          python: py,
+          message: `uv venv failed: ${result.stderr || result.stdout}`,
+        };
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
       return {
         ok: false,
         python: py,
-        message: `uv venv failed: ${result.stderr || result.stdout}`,
+        message: `uv venv failed to launch (is \`uv\` on PATH?): ${msg}`,
       };
     }
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return {
-      ok: false,
-      python: py,
-      message: `uv venv failed to launch (is \`uv\` on PATH?): ${msg}`,
-    };
+    if (!fs.existsSync(py)) {
+      return {
+        ok: false,
+        python: py,
+        message: `venv created but python not found at ${py}`,
+      };
+    }
+    return { ok: true, python: py };
+  })();
+  try {
+    return await ensureVenvInFlight;
+  } finally {
+    ensureVenvInFlight = null;
   }
-  if (!fs.existsSync(py)) {
-    return {
-      ok: false,
-      python: py,
-      message: `venv created but python not found at ${py}`,
-    };
-  }
-  return { ok: true, python: py };
 };
 
 /** Remove the managed venv directory entirely. Uses sync removal to guarantee
@@ -308,9 +371,18 @@ export const installEmbedDeps = async (): Promise<{
   log.info("[speaker-profiles] installing embedding deps (venv mode)");
 
   const isWindows = process.platform === "win32";
-  const cuda = await detectCuda();
+  const cudaInfo = await detectCudaInfo();
+  const cuda = cudaInfo.present;
   log.info(
-    `[speaker-profiles] GPU detection: ${cuda ? "CUDA (nvidia)" : "CPU"}`,
+    `[speaker-profiles] GPU detection: ${
+      cuda
+        ? `CUDA (nvidia${
+            cudaInfo.major != null
+              ? ` ${cudaInfo.major}.${cudaInfo.minor ?? 0}`
+              : ""
+          })`
+        : "CPU"
+    }`,
   );
 
   const venv = await ensureVenv();
@@ -319,13 +391,28 @@ export const installEmbedDeps = async (): Promise<{
   }
   const py = venv.python;
 
-  // Step 1: torch + torchaudio with the correct wheel index.
-  const torchArgs = torchIndexArgs(cuda);
-  const torch = await uvPipInstall(
+  // Step 1: torch + torchaudio with the correct wheel index. If the CUDA
+  // install fails (mismatched driver, 404'd wheel, etc.) fall back to the
+  // CPU build so the user at least gets a working environment.
+  const torchArgs = torchIndexArgs(cuda, cudaInfo);
+  let torch = await uvPipInstall(
     py,
     ["torch", "torchaudio", ...torchArgs],
     15 * 60_000,
   );
+  let usedCpuFallback = false;
+  if (torch.exitCode !== 0 && cuda) {
+    log.warn(
+      "[speaker-profiles] CUDA torch install failed, falling back to CPU build:",
+      torch.stderr || torch.stdout,
+    );
+    torch = await uvPipInstall(
+      py,
+      ["--reinstall", "torch", "torchaudio"],
+      15 * 60_000,
+    );
+    usedCpuFallback = true;
+  }
   if (torch.exitCode !== 0) {
     return {
       ok: false,
@@ -378,9 +465,14 @@ export const installEmbedDeps = async (): Promise<{
     );
   }
 
-  const note = `torch: ${cuda ? "CUDA 12.8" : "CPU"}${
-    isWindows ? "; webrtcvad-wheels" : ""
-  }`;
+  const torchLabel = usedCpuFallback
+    ? "CPU (CUDA fallback)"
+    : cuda
+      ? `CUDA ${pickCudaChannel(cudaInfo)
+          .replace("cu", "")
+          .replace(/(\d)(\d)$/, "$1.$2")}`
+      : "CPU";
+  const note = `torch: ${torchLabel}${isWindows ? "; webrtcvad-wheels" : ""}`;
   return {
     ok: true,
     message: `Installed into managed venv (${note})`,
@@ -509,12 +601,32 @@ const runSidecar = async (
   const fullArgs = [script, ...args];
   log.info(`[speaker-profiles:${opts.stage}] running`, python, fullArgs);
 
+  // Make sure the sidecar can find our bundled ffmpeg for any audio-read
+  // paths that fall through to audioread/ffmpeg (e.g. mp3 decoding on
+  // Windows). We don't rely on this for wav — soundfile handles that
+  // natively — but extending PATH is cheap defense-in-depth.
+  const childEnv: NodeJS.ProcessEnv = { ...process.env };
+  try {
+    // Lazy import to avoid circular deps at module load.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, global-require
+    const ffmpeg = require("./ffmpeg") as typeof import("./ffmpeg");
+    const status = ffmpeg.getCachedFfmpegStatus();
+    if (status?.ok && status.path) {
+      const ffDir = path.dirname(status.path);
+      const sep = process.platform === "win32" ? ";" : ":";
+      childEnv.PATH = childEnv.PATH ? `${ffDir}${sep}${childEnv.PATH}` : ffDir;
+    }
+  } catch {
+    /* best-effort */
+  }
+
   let result;
   try {
     result = await execa(python, fullArgs, {
       stdio: "pipe",
       timeout: opts.timeoutMs ?? 5 * 60_000,
       reject: false,
+      env: childEnv,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -576,7 +688,13 @@ const runSidecar = async (
         log.info("[speaker-profiles] venv rebuilt, retrying sidecar");
         return runSidecar(args, { ...opts, autoInstall: false });
       }
-      // Install failed — fall through to original error.
+      // Install failed — surface the *install* error, not the stale
+      // "module missing" one. Otherwise users chase a phantom import
+      // problem when the real issue is a venv/network/disk failure.
+      const combinedMsg = `Embedding environment rebuild failed: ${install.message}\n(original sidecar error: ${errMsg})`;
+      log.error(`[speaker-profiles:${opts.stage}] ${combinedMsg}`);
+      await setLastError({ stage: opts.stage, message: combinedMsg });
+      throw new Error(combinedMsg);
     }
 
     await setLastError({ stage: opts.stage, message: errMsg });

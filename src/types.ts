@@ -142,19 +142,18 @@ export const defaultSettings = {
     removeRawRecordings: true,
     autoTriggerPostProcess: true,
     binaryPath: "",
-
-    stereoWavFilter:
-      "[0:a][1:a] amerge=inputs=2, pan=stereo|c0<c0+c1|c1<c2+c3, highpass=f=300, lowpass=f=3000 [a]",
-    mp3Filter:
-      "[0:a]aformat=channel_layouts=stereo[a0];[1:a]aformat=channel_layouts=stereo[a1];[a0][a1]amix=inputs=2:duration=longest[aout]",
   },
   whisperx: {
     executable: "whisperx",
     pythonPath: "",
     model: "large-v3",
     language: "auto",
-    device: "cuda" as "cuda" | "cpu" | "mps",
-    computeType: "float16" as "float16" | "int8" | "float32",
+    // Safe cross-platform defaults. On first run, settings init probes the
+    // host for an NVIDIA toolchain (or macOS MPS) and atomically flips to
+    // `cuda`/`float16` when available. CPU + int8 keeps first-run from
+    // hard-crashing on machines without a compatible accelerator.
+    device: "cpu" as "cuda" | "cpu" | "mps",
+    computeType: "int8" as "float16" | "int8" | "float32",
     batchSize: 16,
     diarize: true,
     hfToken: "",

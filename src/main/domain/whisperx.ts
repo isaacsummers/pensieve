@@ -81,13 +81,27 @@ const showWhisperxWarning = async () => {
 };
 
 let whisperxChecked = false;
-const ensureWhisperxAvailable = async () => {
+let whisperxCheckInFlight: Promise<void> | null = null;
+const ensureWhisperxAvailable = async (): Promise<void> => {
   if (whisperxChecked) return;
-  whisperxChecked = true;
-  const result = await checkWhisperxAvailability();
-  if (!result.ok) {
-    log.warn("WhisperX availability check failed:", result.error);
-    await showWhisperxWarning();
+  if (whisperxCheckInFlight) {
+    await whisperxCheckInFlight;
+    return;
+  }
+  whisperxCheckInFlight = (async () => {
+    const result = await checkWhisperxAvailability();
+    if (!result.ok) {
+      log.warn("WhisperX availability check failed:", result.error);
+      await showWhisperxWarning();
+    }
+    // Only mark as checked after the probe actually resolves, so a
+    // throw/crash doesn't permanently suppress the warning dialog.
+    whisperxChecked = true;
+  })();
+  try {
+    await whisperxCheckInFlight;
+  } finally {
+    whisperxCheckInFlight = null;
   }
 };
 

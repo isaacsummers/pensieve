@@ -49,7 +49,9 @@ and summarization, or various audio processing settings.
 
 # MacOS Setup Notes
 
-Pensieve requires FFmpeg and Whisper to be installed on macOS. The easiest way to install these dependencies is using Homebrew:
+Pensieve requires FFmpeg on macOS. WhisperX is installed separately (see
+**Setup — WhisperX transcription** below). The easiest way to install FFmpeg
+is via Homebrew:
 
 ### Prerequisites
 
@@ -63,26 +65,18 @@ Pensieve requires FFmpeg and Whisper to be installed on macOS. The easiest way t
    brew install ffmpeg
    ```
 
-3. **Install Whisper**:
-   ```bash
-   brew install whisper-cpp
-   ```
-
 ### Verification
 
-After installation, verify that both tools are available:
+After installation, verify that FFmpeg is available:
 
 ```bash
 ffmpeg -version
-whisper-cpp --help
 ```
 
 ### Alternative Installation Methods
 
-If you prefer not to use Homebrew:
-
-- **FFmpeg**: Download from [https://ffmpeg.org/download.html](https://ffmpeg.org/download.html)
-- **Whisper**: Download from [https://github.com/ggerganov/whisper.cpp](https://github.com/ggerganov/whisper.cpp)
+If you prefer not to use Homebrew, download FFmpeg from
+[https://ffmpeg.org/download.html](https://ffmpeg.org/download.html).
 
 ### Troubleshooting
 
