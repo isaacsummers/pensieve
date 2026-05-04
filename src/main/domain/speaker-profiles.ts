@@ -620,6 +620,7 @@ export const testPipeline = async (): Promise<{
       timeoutMs: 120_000,
     });
     const s = await read();
+    s.lastError = null;
     s.lastDryRun = {
       ok: true,
       message: `embedding dim=${parsed.dim} via ${parsed.method}`,
