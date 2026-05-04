@@ -10,6 +10,7 @@ import { loadIpcInterfaceInMain } from "./main/ipc/ipc-connector";
 import { mainApi } from "./main/ipc/main-api";
 import { modelsApi } from "./main/ipc/models-api";
 import { whisperxApi } from "./main/ipc/whisperx-api";
+import { ffmpegApi } from "./main/ipc/ffmpeg-api";
 import { historyApi } from "./main/ipc/history-api";
 import { speakerProfilesApi } from "./main/ipc/speaker-profiles-api";
 import { llmApi } from "./main/ipc/llm-api";
@@ -79,6 +80,7 @@ app.whenReady().then(async () => {
   loadIpcInterfaceInMain("history", historyApi);
   loadIpcInterfaceInMain("models", modelsApi);
   loadIpcInterfaceInMain("whisperx", whisperxApi);
+  loadIpcInterfaceInMain("ffmpeg", ffmpegApi);
   loadIpcInterfaceInMain("speakerProfiles", speakerProfilesApi);
   loadIpcInterfaceInMain("llm", llmApi);
   loadIpcInterfaceInMain("recorderIpc", recorderIpcApi);

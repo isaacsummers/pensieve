@@ -141,6 +141,7 @@ export const defaultSettings = {
   ffmpeg: {
     removeRawRecordings: true,
     autoTriggerPostProcess: true,
+    binaryPath: "",
 
     stereoWavFilter:
       "[0:a][1:a] amerge=inputs=2, pan=stereo|c0<c0+c1|c1<c2+c3, highpass=f=300, lowpass=f=3000 [a]",
