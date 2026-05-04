@@ -2,7 +2,7 @@ import path from "path";
 import fs from "fs-extra";
 import * as ffmpeg from "./ffmpeg";
 import * as history from "./history";
-import * as whisper from "./whisper";
+import * as whisperx from "./whisperx";
 import * as models from "./models";
 import * as runner from "./runner";
 import * as llm from "./llm";
@@ -122,7 +122,7 @@ const doWhisperStep = async (job: PostProcessingJob) => {
 
   const model = await models.prepareConfiguredModel();
 
-  await whisper.processWavFile(
+  await whisperx.processWavFile(
     wav,
     path.join(recordingsFolder, job.recordingId, "transcript.json"),
     model,

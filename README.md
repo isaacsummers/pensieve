@@ -24,8 +24,9 @@ Pensieve is a local-only desktop app for recording meetings, discussions, memos 
 snippets from locally running applications for you to always go back and review your
 previous discussions.
 
-It uses a bundled Whisper instance to transcribe the audio locally, and optionally
-summarizes the transcriptions with an LLM. You can connect a local Ollama instance to
+It uses [WhisperX](https://github.com/m-bain/whisperX) to transcribe audio locally
+(with optional pyannote-based speaker diarization), and optionally summarizes the
+transcriptions with an LLM. You can connect a local Ollama instance to
 be used for summarization, or provide an OpenAI key and have ChatGPT summarize the
 transcriptions for you.
 
@@ -95,3 +96,46 @@ If Pensieve shows warning dialogs about missing dependencies:
 If you encounter any issues or bugs with Pensieve, please report them as issue.
 Please provide the log files from your local installation, which is stored in
 the `%USERPROFILE%\AppData\Roaming\Pensieve\logs\main.log` folder.
+
+## Setup — WhisperX transcription
+
+Pensieve shells out to the [WhisperX](https://github.com/m-bain/whisperX) CLI
+for transcription, forced word alignment, and (optionally) pyannote speaker
+diarization. WhisperX is **not bundled** — install it yourself once per
+machine:
+
+### Windows (recommended: `uv`)
+
+1. Install [uv](https://docs.astral.sh/uv/).
+2. `uv tool install whisperx`
+3. Confirm `whisperx --help` works in a new terminal.
+
+For NVIDIA GPU support, install a matching CUDA build of PyTorch into the
+WhisperX tool environment before first use. CPU-only is supported (set
+**Compute type** to `int8` and **Device** to `cpu` in settings).
+
+### macOS / Linux
+
+- `pipx install whisperx` (or `uv tool install whisperx`).
+- Verify `whisperx --help`.
+
+### Diarization (optional)
+
+WhisperX uses pyannote models for speaker diarization. To enable it:
+
+1. Accept the terms at
+   <https://huggingface.co/pyannote/speaker-diarization-3.1> and
+   <https://huggingface.co/pyannote/segmentation-3.0>.
+2. Generate a **read** token at <https://huggingface.co/settings/tokens>.
+3. Paste the token into Pensieve → Settings → Audio Transcription → Hugging
+   Face token.
+
+The first transcription will download the selected Faster-Whisper model (and
+diarization models if enabled) into your Hugging Face cache. Expect a slower
+first run.
+
+### Migration from older Pensieve releases
+
+The previous whisper.cpp backend and its bundled `whisper.exe` are gone.
+Existing `whisper.*` entries in `settings.json` are ignored; the new
+`whisperx.*` block is populated with defaults on first launch.

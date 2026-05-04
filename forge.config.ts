@@ -109,30 +109,15 @@ const config: ForgeConfig = {
         __dirname,
         "node_modules/ffmpeg-static-electron/bin",
       );
-      const whisperBase = path.join(
-        __dirname,
-        "node_modules/whisper-cpp-static/bin",
-      );
       const target = path.join(__dirname, "extra");
       await fs.ensureDir(target);
 
-      // Bundle FFmpeg and Whisper binaries for Windows only
+      // Bundle FFmpeg for Windows. WhisperX is no longer bundled — users
+      // install it separately via `uv tool install whisperx` (see README).
       if (platform === "win32" && arch === "x64") {
         await fs.copy(
           path.join(ffmpegBase, "win/x64/ffmpeg.exe"),
           path.join(target, "ffmpeg.exe"),
-        );
-        await fs.copy(
-          path.join(whisperBase, "whisper-bin-x64/main.exe"),
-          path.join(target, "whisper.exe"),
-        );
-        await fs.copy(
-          path.join(whisperBase, "whisper-bin-x64/SDL2.dll"),
-          path.join(target, "SDL2.dll"),
-        );
-        await fs.copy(
-          path.join(whisperBase, "whisper-bin-x64/whisper.dll"),
-          path.join(target, "whisper.dll"),
         );
       }
 
@@ -141,21 +126,9 @@ const config: ForgeConfig = {
           path.join(ffmpegBase, "win/ia32/ffmpeg.exe"),
           path.join(target, "ffmpeg.exe"),
         );
-        await fs.copy(
-          path.join(whisperBase, "whisper-bin-Win32/main.exe"),
-          path.join(target, "whisper.exe"),
-        );
-        await fs.copy(
-          path.join(whisperBase, "whisper-bin-Win32/SDL2.dll"),
-          path.join(target, "SDL2.dll"),
-        );
-        await fs.copy(
-          path.join(whisperBase, "whisper-bin-Win32/whisper.dll"),
-          path.join(target, "whisper.dll"),
-        );
       }
 
-      // Note: For macOS and Linux, FFmpeg and Whisper will use system installations
+      // Note: For macOS and Linux, FFmpeg and WhisperX use system installations
 
       await createIcon(1);
       await createIcon(2);

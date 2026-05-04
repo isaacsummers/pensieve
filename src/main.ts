@@ -9,6 +9,7 @@ import getPort from "get-port";
 import { loadIpcInterfaceInMain } from "./main/ipc/ipc-connector";
 import { mainApi } from "./main/ipc/main-api";
 import { modelsApi } from "./main/ipc/models-api";
+import { whisperxApi } from "./main/ipc/whisperx-api";
 import { historyApi } from "./main/ipc/history-api";
 import * as history from "./main/domain/history";
 import * as searchIndex from "./main/domain/search";
@@ -75,6 +76,7 @@ app.whenReady().then(async () => {
   loadIpcInterfaceInMain("windows", windowsApi);
   loadIpcInterfaceInMain("history", historyApi);
   loadIpcInterfaceInMain("models", modelsApi);
+  loadIpcInterfaceInMain("whisperx", whisperxApi);
   loadIpcInterfaceInMain("recorderIpc", recorderIpcApi);
 
   searchIndex.initializeSearchIndex().then(() => {

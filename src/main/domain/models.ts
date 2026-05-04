@@ -1,69 +1,33 @@
-// https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin?download=true
 import fs from "fs-extra";
 import path from "path";
 import { app } from "electron";
-import { https } from "follow-redirects";
-import log from "electron-log/main";
-import { modelData } from "../../model-data";
 import { getSettings } from "./settings";
 import * as postprocess from "./postprocess";
 
-const modelFolder = path.join(app.getPath("userData"), "models");
-
-export const validateModelUrl = (url: string) => {
-  return url.startsWith("https://huggingface.co/ggerganov/whisper.cpp");
-};
-
-export const downloadModel = async (url: string, modelFile: string) => {
-  if (!validateModelUrl(url)) {
-    throw new Error("Invalid model URL");
+// WhisperX / faster-whisper caches models under the user's HuggingFace cache
+// (typically ~/.cache/huggingface or ~/.cache/whisper). Pensieve no longer
+// manages model downloads directly — the first transcription run that
+// references a new model will download it.
+export const getModelCacheFolder = () => {
+  // This is informational only; used by the settings UI to surface "open
+  // cache folder" action. WhisperX itself respects HF_HOME / TRANSFORMERS_CACHE
+  // etc., so this is just a best-effort default pointer.
+  const home = app.getPath("home");
+  const candidates = [
+    path.join(home, ".cache", "huggingface"),
+    path.join(home, ".cache", "whisper"),
+  ];
+  for (const dir of candidates) {
+    if (fs.existsSync(dir)) return dir;
   }
-
-  await fs.ensureDir(modelFolder);
-  return new Promise<void>((resolve, reject) => {
-    const req = https.get(url, (res) => {
-      const file = fs.createWriteStream(path.join(modelFolder, modelFile));
-      res.pipe(file);
-      let downloaded = 0;
-      const length = parseInt(res.headers["content-length"] || "0", 10);
-      res.on("data", (chunk) => {
-        downloaded += chunk.length;
-        postprocess.setProgress("modelDownload", downloaded / length);
-      });
-      file.on("finish", () => {
-        file.close();
-        log.info(`Downloaded model ${url} to ${modelFile}`);
-        resolve();
-      });
-    });
-    req.on("error", (err) => {
-      fs.unlink(path.join(modelFolder, modelFile), () => {
-        log.error(`Failed to download model ${url} to ${modelFile}`);
-        reject(err);
-      });
-    });
-  });
-};
-
-export const getModels = async () => {
-  await fs.ensureDir(modelFolder);
-  return fs.readdir(modelFolder);
-};
-
-export const hasModel = async (modelId: string) => {
-  return fs.pathExists(path.join(modelFolder, modelData[modelId].fileName));
-};
-
-export const getModelPath = (modelId: string) => {
-  return path.join(modelFolder, modelData[modelId].fileName);
+  return candidates[0];
 };
 
 export const prepareConfiguredModel = async () => {
-  const { model } = (await getSettings()).whisper;
-  if (!(await hasModel(model))) {
-    postprocess.setStep("modelDownload");
-    await downloadModel(modelData[model].url, modelData[model].fileName);
-  }
+  const { model } = (await getSettings()).whisperx;
+  // WhisperX handles model download/caching on its own. We just surface the
+  // current "modelDownload" step as complete so the existing progress UI
+  // keeps rendering sensibly.
   postprocess.setProgress("modelDownload", 1);
   return model;
 };

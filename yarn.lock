@@ -2,7 +2,7 @@
 # Manual changes might be lost - proceed with caution!
 
 __metadata:
-  version: 8
+  version: 9
   cacheKey: 10
 
 "@aashutoshrathi/word-wrap@npm:^1.2.3":
@@ -12481,7 +12481,6 @@ __metadata:
     typescript: "npm:^5.4.3"
     update-electron-app: "npm:^3.0.0"
     vite: "npm:^5.0.12"
-    whisper-cpp-static: "npm:^0.0.3"
     zustand: "npm:^4.5.2"
   dependenciesMeta:
     markbase:
@@ -15081,15 +15080,6 @@ __metadata:
   bin:
     node-which: bin/which.js
   checksum: 10/f17e84c042592c21e23c8195108cff18c64050b9efb8459589116999ea9da6dd1509e6a1bac3aeebefd137be00fabbb61b5c2bc0aa0f8526f32b58ee2f545651
-  languageName: node
-  linkType: hard
-
-"whisper-cpp-static@npm:^0.0.3":
-  version: 0.0.3
-  resolution: "whisper-cpp-static@npm:0.0.3"
-  bin:
-    whisper-cpp-static: bin/whisper-bin-x64/main.exe
-  checksum: 10/1fe879815522c5ea4c7cdbfae5d51182d6078abbc62242c20731acebb30af2013195dbfdf6e2156103f8cf79abcbb02d29d6baef1985d3342fdea0e9b04d4ffa
   languageName: node
   linkType: hard
 

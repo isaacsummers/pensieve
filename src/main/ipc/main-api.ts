@@ -47,11 +47,6 @@ export const mainApi = {
     await shell.openPath(folder);
   },
 
-  openModelsFolder: async () => {
-    const folder = path.join(app.getPath("userData"), "models");
-    await shell.openPath(folder);
-  },
-
   openWeb: async (url: string) => {
     await shell.openExternal(url);
   },

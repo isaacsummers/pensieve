@@ -1,4 +1,4 @@
 export * as ffmpeg from "./ffmpeg";
-export * as whisper from "./whisper";
+export * as whisperx from "./whisperx";
 export * as models from "./models";
 export * as history from "./history";
