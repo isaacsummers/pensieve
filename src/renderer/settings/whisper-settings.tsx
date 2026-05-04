@@ -1,4 +1,4 @@
-import { FC } from "react";
+import { FC, useEffect, useState } from "react";
 import * as Tabs from "@radix-ui/react-tabs";
 import {
   Badge,
@@ -7,6 +7,7 @@ import {
   Flex,
   Heading,
   IconButton,
+  Spinner,
   Text,
 } from "@radix-ui/themes";
 import { useFormContext } from "react-hook-form";
@@ -347,6 +348,9 @@ const TestTranscriptionPanel: FC = () => {
   );
 };
 
+const isMissingModuleMessage = (msg: string) =>
+  msg.includes("No module named") || msg.includes("ModuleNotFoundError");
+
 const SpeakerProfilesPanel: FC = () => {
   const qc = useQueryClient();
   const { data: profiles } = useQuery({
@@ -358,6 +362,10 @@ const SpeakerProfilesPanel: FC = () => {
     queryFn: speakerProfilesApi.getStatus,
     refetchInterval: 5000,
   });
+
+  const [depsBanner, setDepsBanner] = useState<
+    "hidden" | "show" | "installing" | "done"
+  >("hidden");
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: [QueryKeys.SpeakerProfiles] });
@@ -378,12 +386,76 @@ const SpeakerProfilesPanel: FC = () => {
     onSettled: invalidate,
   });
 
+  // Background dry-run on mount: show banner if deps are missing.
+  useEffect(() => {
+    let cancelled = false;
+    const silentCheck = async () => {
+      try {
+        const result = await speakerProfilesApi.testPipeline();
+        if (
+          !cancelled &&
+          !result.ok &&
+          isMissingModuleMessage(result.message)
+        ) {
+          setDepsBanner("show");
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+    // Only run if no prior successful dry-run recorded.
+    if (!status?.lastDryRun?.ok) {
+      silentCheck();
+    }
+    return () => {
+      cancelled = true;
+    };
+    // Run once on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleInstallAndTest = async () => {
+    setDepsBanner("installing");
+    await speakerProfilesApi.installDeps();
+    setDepsBanner("done");
+    testMutation.mutate();
+  };
+
   const lastError = status?.lastError;
   const lastDryRun = status?.lastDryRun;
   const testResult = testMutation.data;
 
+  const showInstallButton =
+    (testResult &&
+      !testResult.ok &&
+      isMissingModuleMessage(testResult.message)) ||
+    (lastDryRun &&
+      !lastDryRun.ok &&
+      isMissingModuleMessage(lastDryRun.message));
+
   return (
     <>
+      {depsBanner === "show" && (
+        <Callout.Root color="amber" variant="surface" mt="0.5rem">
+          <Callout.Icon>
+            <HiOutlineXCircle />
+          </Callout.Icon>
+          <Callout.Text>
+            Embedding dependencies not installed.{" "}
+            <Button size="1" variant="soft" onClick={handleInstallAndTest}>
+              Click to install
+            </Button>
+          </Callout.Text>
+        </Callout.Root>
+      )}
+      {depsBanner === "installing" && (
+        <Callout.Root color="amber" variant="surface" mt="0.5rem">
+          <Callout.Icon>
+            <Spinner size="1" />
+          </Callout.Icon>
+          <Callout.Text>Installing dependencies…</Callout.Text>
+        </Callout.Root>
+      )}
       <Heading mt="1.5rem" size="3">
         Saved profiles
       </Heading>
@@ -409,6 +481,28 @@ const SpeakerProfilesPanel: FC = () => {
           </Text>
         )}
       </Flex>
+      {showInstallButton && (
+        <Flex align="center" gap="0.5rem" mt="0.25rem" mb="0.5rem">
+          <Button
+            type="button"
+            variant="soft"
+            color="amber"
+            onClick={handleInstallAndTest}
+            disabled={testMutation.isPending || depsBanner === "installing"}
+          >
+            {depsBanner === "installing" ? (
+              <>
+                <Spinner size="1" /> Installing…
+              </>
+            ) : (
+              "Auto-install dependencies"
+            )}
+          </Button>
+          <Text size="1" color="gray">
+            Will run: uv pip install --system resemblyzer librosa numpy
+          </Text>
+        </Flex>
+      )}
       {lastError && (
         <Callout.Root color="red" variant="surface" mt="0.5rem">
           <Callout.Icon>

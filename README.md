@@ -139,3 +139,25 @@ first run.
 The previous whisper.cpp backend and its bundled `whisper.exe` are gone.
 Existing `whisper.*` entries in `settings.json` are ignored; the new
 `whisperx.*` block is populated with defaults on first launch.
+
+### Speaker embedding pipeline
+
+Pensieve can extract voice embeddings for each diarized speaker and match them
+against saved profiles. This requires three Python packages: `resemblyzer`,
+`librosa`, and `numpy`.
+
+**These are installed automatically.** The first time the embedding pipeline
+runs (or when the "Test embedding pipeline" button is clicked in Settings and
+dependencies are missing), Pensieve will install them automatically:
+
+```
+uv pip install --system resemblyzer librosa numpy   # Windows (uv)
+pip install resemblyzer librosa numpy               # fallback
+```
+
+Progress is shown in the Settings panel. No manual `pip install` step is
+needed. If auto-install fails, run the command above manually in the same
+Python environment Pensieve uses.
+
+For `yarn make` Windows installer builds: the auto-install runs on first use,
+so end-users do not need to run any pip commands manually.

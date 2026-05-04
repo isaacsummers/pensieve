@@ -13,6 +13,8 @@ export const speakerProfilesApi = {
 
   testPipeline: async () => profiles.testPipeline(),
 
+  installDeps: async () => profiles.installEmbedDeps(),
+
   /**
    * Create or update a speaker profile from a single speaker key on a
    * recording. The recording must already have embeddings attached (produced

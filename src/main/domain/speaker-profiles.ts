@@ -116,6 +116,54 @@ export const removeProfile = async (id: string) => {
   await write(s);
 };
 
+// --- dependency installer --------------------------------------------------
+
+const EMBED_DEPS = ["resemblyzer", "librosa", "numpy"];
+
+export const installEmbedDeps = async (): Promise<{
+  ok: boolean;
+  message: string;
+}> => {
+  log.info("[speaker-profiles] installing embedding deps:", EMBED_DEPS);
+
+  // Try uv first (preferred on Windows), then pip / pip3.
+  const attempts: Array<[string, string[]]> = [
+    ["uv", ["pip", "install", "--system", ...EMBED_DEPS]],
+    ["pip", ["install", ...EMBED_DEPS]],
+    ["pip3", ["install", ...EMBED_DEPS]],
+  ];
+
+  for (const [cmd, args] of attempts) {
+    try {
+      log.info(`[speaker-profiles] trying: ${cmd} ${args.join(" ")}`);
+      const result = await execa(cmd, args, {
+        stdio: "pipe",
+        timeout: 5 * 60_000,
+        reject: false,
+      });
+      if (result.exitCode === 0) {
+        log.info("[speaker-profiles] dep install succeeded via", cmd);
+        return { ok: true, message: `Installed via ${cmd}` };
+      }
+      log.warn(
+        `[speaker-profiles] ${cmd} exited ${result.exitCode}:`,
+        result.stderr,
+      );
+    } catch (e) {
+      // Command not found — try next.
+      log.warn("[speaker-profiles] dep install attempt failed:", cmd, e);
+    }
+  }
+
+  const msg =
+    "Could not install dependencies automatically. Run: pip install resemblyzer librosa numpy";
+  return { ok: false, message: msg };
+};
+
+const isMissingModuleError = (message: string): boolean =>
+  message.includes("No module named") ||
+  message.includes("ModuleNotFoundError");
+
 // --- sidecar ---------------------------------------------------------------
 
 const cosineSimilarity = (a: number[], b: number[]): number => {
@@ -199,7 +247,7 @@ export type SidecarResult = {
 
 const runSidecar = async (
   args: string[],
-  opts: { stage: string; timeoutMs?: number },
+  opts: { stage: string; timeoutMs?: number; autoInstall?: boolean },
 ): Promise<any> => {
   const python = await resolvePythonCmd();
   const script = await resolveScriptPath();
@@ -254,6 +302,25 @@ const runSidecar = async (
       (parsed && parsed.error) ||
       stderr.trim().split("\n").slice(-5).join(" | ") ||
       `sidecar exited with code ${result.exitCode}`;
+
+    // Auto-install missing Python deps on first failure, then retry once.
+    if (opts.autoInstall !== false && isMissingModuleError(errMsg)) {
+      log.info(
+        "[speaker-profiles] missing module detected, auto-installing deps",
+      );
+      await setLastError({
+        stage: opts.stage,
+        message: "Installing dependencies… please wait",
+      });
+      const install = await installEmbedDeps();
+      if (install.ok) {
+        log.info("[speaker-profiles] deps installed, retrying sidecar");
+        // Retry — pass autoInstall:false to avoid infinite loops.
+        return runSidecar(args, { ...opts, autoInstall: false });
+      }
+      // Install failed — fall through to original error.
+    }
+
     await setLastError({ stage: opts.stage, message: errMsg });
     throw new Error(errMsg);
   }
