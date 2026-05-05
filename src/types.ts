@@ -144,7 +144,7 @@ export const defaultSettings = {
     binaryPath: "",
   },
   whisperx: {
-    executable: "whisperx",
+    executable: "",
     pythonPath: "",
     model: "large-v3",
     language: "auto",

@@ -35,11 +35,19 @@ type WhisperxSettings = Awaited<ReturnType<typeof getSettings>>["whisperx"];
 const getCommand = (
   settings: Pick<WhisperxSettings, "executable" | "pythonPath">,
 ): { cmd: string; prefix: string[] } => {
+  log.info(
+    `[whisperx:getCommand] executable="${settings.executable}" pythonPath="${settings.pythonPath}"`,
+  );
   if (settings.pythonPath && settings.pythonPath.trim()) {
     return { cmd: settings.pythonPath.trim(), prefix: ["-m", "whisperx"] };
   }
-  if (settings.executable && settings.executable.trim()) {
-    return { cmd: settings.executable.trim(), prefix: [] };
+  // Migration: prior versions defaulted `executable` to the literal string
+  // "whisperx". Users upgrading carry that default in their settings.json,
+  // and we don't want to short-circuit the venv lookup just because the
+  // saved value matches the legacy default. Treat bare "whisperx" as unset.
+  const explicitExe = settings.executable?.trim();
+  if (explicitExe && explicitExe.toLowerCase() !== "whisperx") {
+    return { cmd: explicitExe, prefix: [] };
   }
   // Project-managed venv: prefer running whisperx via the venv's Python
   // (-m whisperx) when available, falling back to the venv's whisperx

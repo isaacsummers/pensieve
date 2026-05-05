@@ -146,7 +146,7 @@ export const WhisperSettings: FC = () => {
       <SettingsTextField
         {...form.register("whisperx.executable")}
         label="WhisperX executable"
-        description="Command or absolute path. Leave as `whisperx` to resolve via PATH."
+        description="Optional. Leave blank to use the bundled WhisperX venv (default). Set to a command or absolute path only to override."
       />
       <SettingsTextField
         {...form.register("whisperx.pythonPath")}
