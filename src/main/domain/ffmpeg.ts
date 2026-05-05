@@ -3,6 +3,7 @@ import os from "os";
 import fs from "fs";
 import { execa } from "execa";
 import { dialog, shell } from "electron";
+import log from "electron-log/main";
 import {
   getExtraResourcesFolder,
   getMillisecondsFromTimeString,
@@ -167,6 +168,7 @@ export const detectFfmpeg = async (): Promise<FfmpegStatus> => {
   }
 
   // 2. Walk candidates in priority order.
+  const attempts: Array<{ path: string; error: string }> = [];
   for (const { path: exe, source } of buildCandidates()) {
     // For absolute paths, skip if the file doesn't exist — avoids spawning
     // a failing process for every non-existent candidate.
@@ -178,14 +180,30 @@ export const detectFfmpeg = async (): Promise<FfmpegStatus> => {
     if (v.ok) {
       return { ok: true, path: exe, source, version: v.version };
     }
+    // Existed-on-disk-but-failed-to-run is the interesting case (silent
+    // failures previously hid antivirus blocks, missing DLLs, arch
+    // mismatches, etc.). Log so it shows up in the Electron console and
+    // remember it for the final error message.
+    const err = v.error ?? "unknown error";
+    if (path.isAbsolute(exe)) {
+      log.warn(
+        `[ffmpeg] candidate ${exe} exists on disk but \`-version\` failed: ${err}`,
+      );
+    }
+    attempts.push({ path: exe, error: err });
   }
 
+  const lastAttempt = attempts[attempts.length - 1];
+  const baseMsg = "ffmpeg not found in extra/, C:\\ffmpeg, or PATH";
+  const detail = lastAttempt
+    ? ` — last tried \`${lastAttempt.path}\`: ${lastAttempt.error}`
+    : "";
   return {
     ok: false,
     path: null,
     source: "missing",
     version: null,
-    error: "ffmpeg not found in extra/, C:\\ffmpeg, or PATH",
+    error: `${baseMsg}${detail}`,
   };
 };
 

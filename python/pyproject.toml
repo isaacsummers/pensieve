@@ -14,7 +14,7 @@ torch = { index = "pytorch-cuda" }
 torchvision = { index = "pytorch-cuda" }
 torchaudio = { index = "pytorch-cuda" }
 
-[[tool.uv.indexes]]
+[[tool.uv.index]]
 name = "pytorch-cuda"
-url = "https://download.pytorch.org/whl/cu124"
+url = "https://download.pytorch.org/whl/cu126"
 explicit = true
