@@ -1,6 +1,6 @@
 import path from "path";
 import fs from "fs-extra";
-import { getUserDataFolder } from "../../main-utils";
+import { getUserDataFolder, isDevBuild } from "../../main-utils";
 
 /**
  * Project-managed WhisperX Python environment.
@@ -19,7 +19,7 @@ import { getUserDataFolder } from "../../main-utils";
  *                                                     .venv created in place)
  */
 
-const isDev = (): boolean => process.env.NODE_ENV === "development";
+const isDev = (): boolean => isDevBuild();
 
 /**
  * Repo root in dev mode. The compiled main process lives at

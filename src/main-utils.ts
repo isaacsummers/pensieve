@@ -14,6 +14,13 @@ export const getExtraResourcesFolder = () => {
  */
 export const getUserDataFolder = (): string => app.getPath("userData");
 
+/**
+ * True when running under `electron-forge start` (or any unpackaged
+ * Electron run). False inside a packaged app. Wrapped so domain modules
+ * don't have to import directly from "electron".
+ */
+export const isDevBuild = (): boolean => !app.isPackaged;
+
 export const getMillisecondsFromTimeString = (time: string) => {
   if (!time) return 0;
   const [h, m, s, ms] = time.split(/[:.]/).map(Number);
