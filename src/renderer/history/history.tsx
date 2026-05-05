@@ -37,7 +37,7 @@ export const History: FC = () => {
     () =>
       new Set(
         postprocessing?.processingQueue
-          .filter(({ isDone }) => !isDone)
+          .filter(({ status }) => status === "queued" || status === "processing")
           .map(({ recordingId }) => recordingId) ?? [],
       ),
     [postprocessing?.processingQueue],

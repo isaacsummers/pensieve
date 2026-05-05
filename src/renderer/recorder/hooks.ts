@@ -14,6 +14,18 @@ export const useMicSources = () =>
     refetchInterval: 5000,
   }).data;
 
+export const useAudioOutputSources = () =>
+  useQuery({
+    queryKey: [QueryKeys.MicrophoneSources, "outputs"],
+    queryFn: async () => {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      return devices.filter((device) => device.kind === "audiooutput");
+    },
+    refetchOnMount: true,
+    refetchOnWindowFocus: true,
+    refetchInterval: 5000,
+  }).data;
+
 export const useScreenSources = () =>
   useQuery({
     queryKey: [QueryKeys.ScreenSources],

@@ -7,9 +7,9 @@ import {
   TextField,
 } from "@radix-ui/themes";
 
-import { forwardRef } from "react";
+import { forwardRef, useEffect } from "react";
 import { useRecorderState } from "./state";
-import { MicSelector } from "./mic-selector";
+import { MicMultiSelector } from "./mic-multi-selector";
 import { useMicSources } from "./hooks";
 import { RecorderInsession } from "./recorder-insession";
 
@@ -23,13 +23,13 @@ export const Recorder = forwardRef<HTMLDivElement>((_, ref) => {
     recorder,
     meta,
     setMeta,
+    hydrateFromSettings,
   } = useRecorderState();
 
-  // not sure why that was needed?
-  // useEffect(() => {
-  //   reset();
-  //   // eslint-disable-next-line react-hooks/exhaustive-deps
-  // }, []);
+  // Restore persisted recording settings on first mount. Cheap, idempotent.
+  useEffect(() => {
+    hydrateFromSettings();
+  }, [hydrateFromSettings]);
 
   if (recorder) {
     return <RecorderInsession ref={ref} />;
@@ -92,7 +92,7 @@ export const Recorder = forwardRef<HTMLDivElement>((_, ref) => {
             <Text size="2" weight="bold">
               Microphone
             </Text>
-            <MicSelector />
+            <MicMultiSelector />
           </Box>
         </Flex>
       </Box>

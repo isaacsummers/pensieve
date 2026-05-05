@@ -4,7 +4,17 @@ import { datahookMarkdownTemplate } from "./datahooks-defaults";
 
 export type RecordingConfig = {
   recordScreenAudio?: boolean;
+  /** Primary microphone input (kept for backwards compatibility). */
   mic?: MediaDeviceInfo;
+  /**
+   * Additional audio devices to capture alongside the primary mic. May
+   * include both `audioinput` and `audiooutput` kinds — output devices are
+   * supported best-effort for things like SteelSeries Sonar's virtual
+   * channels, which often expose accessible inputs on Windows. True
+   * loopback capture of plain output devices requires WASAPI and is a
+   * known limitation handled gracefully at record time.
+   */
+  additionalAudioDevices?: MediaDeviceInfo[];
 };
 
 export type RecordingData = {
@@ -84,12 +94,27 @@ export type PostProcessingStep =
   | "summary"
   | "datahooks";
 
+export type QueueItemStatus =
+  | "queued"
+  | "processing"
+  | "failed"
+  | "done"
+  | "cancelled";
+
 export type PostProcessingJob = {
+  /** Stable id for renderer keys and IPC addressing. */
+  id: string;
   recordingId: string;
   steps?: PostProcessingStep[];
+  status: QueueItemStatus;
   error?: string;
-  isDone?: boolean;
-  isRunning?: boolean;
+  /** Sort key — authoritative ordering for the queue. */
+  order: number;
+};
+
+export type PersistedAudioDevice = {
+  deviceId: string;
+  kind: "input" | "output";
 };
 
 export const defaultSettings = {
@@ -169,6 +194,21 @@ export const defaultSettings = {
       matchThreshold: 0.75,
       minSpeakerSeconds: 0.3,
     },
+  },
+  recording: {
+    /** Persisted last mic-enabled state. */
+    micEnabled: true,
+    /** Last selected primary mic deviceId (null = system default). */
+    selectedMicDeviceId: null as string | null,
+    /**
+     * Additional audio devices captured alongside the primary mic. May be
+     * audio inputs or audio outputs (virtual mix devices like Sonar's
+     * Gaming/Chat/Media channels often appear as outputs).
+     */
+    additionalAudioDevices: [] as {
+      deviceId: string;
+      kind: "input" | "output";
+    }[],
   },
   datahooks: {
     enabled: false,

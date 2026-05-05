@@ -16,6 +16,16 @@ import { PostProcessingJob, PostProcessingStep } from "../../types";
 
 let isRunning = false;
 let processingQueue: PostProcessingJob[] = [];
+let jobIdCounter = 0;
+const nextJobId = (recordingId: string) =>
+  `${recordingId}-${Date.now()}-${(jobIdCounter += 1)}`;
+const nextOrder = () =>
+  processingQueue.length === 0
+    ? 0
+    : Math.max(...processingQueue.map((j) => j.order)) + 1;
+const sortQueue = () => {
+  processingQueue = [...processingQueue].sort((a, b) => a.order - b.order);
+};
 const emptyProgress: Record<PostProcessingStep, null | number> = {
   modelDownload: 0,
   wav: null,
@@ -28,8 +38,10 @@ const progress = { ...emptyProgress };
 let lastUiUpdate = 0;
 let currentStep: keyof typeof progress | "notstarted" = "notstarted";
 let abortedFlag = false;
+let cancelCurrentFlag = false;
 
 export const hasAborted = () => abortedFlag;
+export const hasCancelledCurrent = () => cancelCurrentFlag;
 
 const updateUiProgress = () => {
   if (Date.now() < lastUiUpdate) {
@@ -49,7 +61,12 @@ const updateUiProgress = () => {
 };
 
 export const getCurrentItem = () => {
-  return isRunning ? processingQueue[0] : null;
+  if (!isRunning) return null;
+  return (
+    processingQueue.find((j) => j.status === "processing") ??
+    processingQueue[0] ??
+    null
+  );
 };
 
 export const getProgress = (step: keyof typeof progress) => {
@@ -66,8 +83,95 @@ export const setStep = (step: keyof typeof progress | "notstarted") => {
   updateUiProgress();
 };
 
-export const addToQueue = (job: PostProcessingJob) => {
-  processingQueue.push(job);
+export const addToQueue = (
+  job: Omit<PostProcessingJob, "status" | "order" | "id"> & {
+    id?: string;
+    status?: PostProcessingJob["status"];
+    order?: number;
+  },
+) => {
+  const full: PostProcessingJob = {
+    ...job,
+    id: job.id ?? nextJobId(job.recordingId),
+    status: job.status ?? "queued",
+    order: job.order ?? nextOrder(),
+  };
+  processingQueue.push(full);
+  sortQueue();
+  updateUiProgress();
+};
+
+export const cancelCurrentItem = () => {
+  cancelCurrentFlag = true;
+  runner.abortAllExecutions();
+};
+
+export const removeFromQueue = (id: string) => {
+  const job = processingQueue.find((j) => j.id === id);
+  if (!job) return;
+  if (job.status === "processing") {
+    cancelCurrentItem();
+    // The runner will mark it cancelled and advance; we leave the entry
+    // visible so the user can retry, mirroring the failed-state behaviour.
+    return;
+  }
+  processingQueue = processingQueue.filter((j) => j.id !== id);
+  updateUiProgress();
+};
+
+export const retryItem = (id: string) => {
+  const job = processingQueue.find((j) => j.id === id);
+  if (!job) return;
+  if (job.status !== "failed" && job.status !== "cancelled") return;
+  job.status = "queued";
+  job.error = undefined;
+  job.order = nextOrder();
+  sortQueue();
+  if (!isRunning) startQueue();
+  updateUiProgress();
+};
+
+export const reorderItem = (id: string, afterId: string | null) => {
+  const sorted = [...processingQueue].sort((a, b) => a.order - b.order);
+  const fromIdx = sorted.findIndex((j) => j.id === id);
+  if (fromIdx === -1) return;
+  const job = sorted[fromIdx];
+  if (job.status !== "queued") return;
+  const [removed] = sorted.splice(fromIdx, 1);
+  let toIdx: number;
+  if (afterId === null) {
+    toIdx = 0;
+  } else {
+    const afterIdx = sorted.findIndex((j) => j.id === afterId);
+    toIdx = afterIdx === -1 ? sorted.length : afterIdx + 1;
+  }
+  sorted.splice(toIdx, 0, removed);
+  sorted.forEach((j, i) => {
+    j.order = i;
+  });
+  processingQueue = sorted;
+  updateUiProgress();
+};
+
+export const retryAllFailed = () => {
+  const candidates = processingQueue.filter(
+    (j) => j.status === "failed" || j.status === "cancelled",
+  );
+  if (candidates.length === 0) return;
+  let order = nextOrder();
+  for (const job of candidates) {
+    job.status = "queued";
+    job.error = undefined;
+    job.order = order;
+    order += 1;
+  }
+  sortQueue();
+  if (!isRunning) startQueue();
+  updateUiProgress();
+};
+
+export const clearCompleted = () => {
+  processingQueue = processingQueue.filter((j) => j.status !== "done");
   updateUiProgress();
 };
 
@@ -84,8 +188,12 @@ const hasStep = (job: PostProcessingJob, step: PostProcessingStep) => {
   return !job.steps || job.steps?.includes(step);
 };
 
+const isCancelMidProcessing = (job: PostProcessingJob) =>
+  cancelCurrentFlag && job.status === "processing";
+
 const doWavStep = async (job: PostProcessingJob) => {
-  if (hasAborted() || !hasStep(job, "wav")) return;
+  if (hasAborted() || isCancelMidProcessing(job) || !hasStep(job, "wav"))
+    return;
   setStep("wav");
   const { mic, screen, wav } = await getFilePaths(job);
 
@@ -101,7 +209,8 @@ const doWavStep = async (job: PostProcessingJob) => {
 };
 
 const doMp3Step = async (job: PostProcessingJob) => {
-  if (hasAborted() || !hasStep(job, "mp3")) return;
+  if (hasAborted() || isCancelMidProcessing(job) || !hasStep(job, "mp3"))
+    return;
   setStep("mp3");
   const { mic, screen, mp3 } = await getFilePaths(job);
 
@@ -117,7 +226,12 @@ const doMp3Step = async (job: PostProcessingJob) => {
 };
 
 const doWhisperStep = async (job: PostProcessingJob) => {
-  if (hasAborted() || !hasStep(job, "whisper")) return;
+  if (
+    hasAborted() ||
+    isCancelMidProcessing(job) ||
+    !hasStep(job, "whisper")
+  )
+    return;
   const { wav, mp3, recordingsFolder } = await getFilePaths(job);
 
   const model = await models.prepareConfiguredModel();
@@ -174,6 +288,7 @@ const doSummaryStep = async (job: PostProcessingJob) => {
 
   if (
     hasAborted() ||
+    isCancelMidProcessing(job) ||
     !hasStep(job, "summary") ||
     !settings.llm.enabled ||
     !transcript
@@ -188,7 +303,12 @@ const doSummaryStep = async (job: PostProcessingJob) => {
 const doDataHooksStep = async (job: PostProcessingJob) => {
   const settings = await getSettings();
 
-  if (hasAborted() || !hasStep(job, "datahooks") || !settings.datahooks.enabled)
+  if (
+    hasAborted() ||
+    isCancelMidProcessing(job) ||
+    !hasStep(job, "datahooks") ||
+    !settings.datahooks.enabled
+  )
     return;
   setStep("datahooks");
   await datahooks.runDatahooks(job);
@@ -239,26 +359,36 @@ export const startQueue = () => {
   abortedFlag = false;
   isRunning = true;
   const next = async () => {
-    const job = processingQueue.find((job) => !job.isDone);
+    const job = processingQueue
+      .filter((j) => j.status === "queued")
+      .sort((a, b) => a.order - b.order)[0];
 
     if (!job) {
       isRunning = false;
+      updateUiProgress();
       return;
     }
 
+    cancelCurrentFlag = false;
     try {
-      job.isRunning = true;
+      job.status = "processing";
       resetProgress();
+      updateUiProgress();
       await postProcessRecording(job);
-      job.isDone = true;
-      job.isRunning = false;
+      job.status = cancelCurrentFlag ? "cancelled" : "done";
     } catch (err) {
-      if (hasAborted()) return;
+      if (hasAborted()) {
+        // Whole-queue stop: leave job as-is (still 'processing' visually).
+        // We reset on next start.
+        return;
+      }
       console.error("Failed to process recording", job.recordingId, err);
       job.error = err instanceof Error ? err.message : String(err);
-      job.isDone = true;
-      job.isRunning = false;
+      job.status = cancelCurrentFlag ? "cancelled" : "failed";
+    } finally {
+      cancelCurrentFlag = false;
     }
+    updateUiProgress();
     next();
   };
 
@@ -269,6 +399,10 @@ export const stop = () => {
   abortedFlag = true;
   runner.abortAllExecutions();
   isRunning = false;
+  // Reset any in-flight item back to queued so the user can resume.
+  processingQueue.forEach((j) => {
+    if (j.status === "processing") j.status = "queued";
+  });
   resetProgress();
   setStep("notstarted");
   updateUiProgress();

@@ -22,10 +22,23 @@ export const historyApi = {
 
   startPostProcessing: async () => postprocess.startQueue(),
   stopPostProcessing: async () => postprocess.stop(),
-  addToPostProcessingQueue: async (job: PostProcessingJob) =>
-    postprocess.addToQueue(job),
+  addToPostProcessingQueue: async (
+    job: Pick<PostProcessingJob, "recordingId"> &
+      Partial<Omit<PostProcessingJob, "recordingId">>,
+  ) => postprocess.addToQueue(job),
   getPostProcessingProgress: async () => postprocess.getProgressData(),
   clearPostProcessingQueue: async () => postprocess.clearList(),
+  removeFromPostProcessingQueue: async (id: string) =>
+    postprocess.removeFromQueue(id),
+  cancelPostProcessingItem: async (id: string) => {
+    // Item-level cancel: cancels in-flight item or removes a queued one.
+    postprocess.removeFromQueue(id);
+  },
+  retryPostProcessingItem: async (id: string) => postprocess.retryItem(id),
+  reorderPostProcessingItem: async (id: string, afterId: string | null) =>
+    postprocess.reorderItem(id, afterId),
+  retryAllFailedPostProcessing: async () => postprocess.retryAllFailed(),
+  clearCompletedPostProcessing: async () => postprocess.clearCompleted(),
 
   openRecordingDetailsWindow: async (id: string) => {
     openAppWindow(`/history/${id}`, {}, { minWidth: 400, minHeight: 400 });

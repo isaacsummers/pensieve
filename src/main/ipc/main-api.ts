@@ -58,4 +58,10 @@ export const mainApi = {
   getSettings: settings.getSettings,
   saveSettings: settings.saveSettings,
   resetSettings: settings.reset,
+
+  updateRecordingSettings: async (patch: {
+    micEnabled: boolean;
+    selectedMicDeviceId: string | null;
+    additionalAudioDevices: { deviceId: string; kind: "input" | "output" }[];
+  }) => settings.updateRecordingSettings(patch),
 };

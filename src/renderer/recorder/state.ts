@@ -15,6 +15,7 @@ type RecorderState = {
   getCurrentTime: () => number;
   setMeta: (meta: Partial<RecordingMeta>) => void;
   setConfig: (config: Partial<RecordingConfig>) => void;
+  hydrateFromSettings: () => Promise<void>;
   startRecording: () => Promise<void>;
   reset: () => void;
   pause: () => void;
@@ -58,8 +59,70 @@ export const useRecorderState = create<RecorderState>()((_set, get) => {
 
     setMeta: (meta: Partial<RecordingMeta>) =>
       set({ meta: { ...get().meta, ...meta } }),
-    setConfig: (config) =>
-      set({ recordingConfig: { ...get().recordingConfig, ...config } }),
+    setConfig: (config) => {
+      const next = { ...get().recordingConfig, ...config };
+      set({ recordingConfig: next });
+      // Fire-and-forget persist. We persist `micEnabled` from the truthiness
+      // of `mic` so toggling the recording-mic checkbox round-trips.
+      mainApi
+        .updateRecordingSettings({
+          micEnabled: !!next.mic,
+          selectedMicDeviceId: next.mic?.deviceId ?? null,
+          additionalAudioDevices: (next.additionalAudioDevices ?? []).map(
+            (d) => ({
+              deviceId: d.deviceId,
+              kind: d.kind === "audiooutput" ? "output" : "input",
+            }),
+          ),
+        })
+        .catch((err) => {
+          // eslint-disable-next-line no-console
+          console.warn("Failed to persist recording settings", err);
+        });
+    },
+    hydrateFromSettings: async () => {
+      try {
+        const settings = await mainApi.getSettings();
+        const recording = settings.recording;
+        if (!recording) return;
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const audioInputs = devices.filter((d) => d.kind === "audioinput");
+        const audioOutputs = devices.filter((d) => d.kind === "audiooutput");
+
+        // Resolve primary mic: by id first, then label, then default.
+        const findInput = (deviceId: string | null) => {
+          if (!deviceId) return undefined;
+          const byId = audioInputs.find((d) => d.deviceId === deviceId);
+          if (byId) return byId;
+          // OQ-5: fall back to label-match if the saved id has rotated.
+          // Without a stored label we can't match here — the additional-
+          // devices block stores label info via deviceId only too. Practical
+          // mismatches show up there, so primary just falls through.
+          return undefined;
+        };
+        const primary =
+          findInput(recording.selectedMicDeviceId) ?? audioInputs[0];
+
+        // Resolve additional devices preserving stored kind.
+        const additional: MediaDeviceInfo[] = [];
+        for (const stored of recording.additionalAudioDevices ?? []) {
+          const pool = stored.kind === "output" ? audioOutputs : audioInputs;
+          const match = pool.find((d) => d.deviceId === stored.deviceId);
+          if (match) additional.push(match);
+        }
+
+        set({
+          recordingConfig: {
+            recordScreenAudio: get().recordingConfig.recordScreenAudio ?? true,
+            mic: recording.micEnabled ? primary : undefined,
+            additionalAudioDevices: additional,
+          },
+        });
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn("Failed to hydrate recording settings", err);
+      }
+    },
     startRecording: async () => {
       set({
         recorder: await createRecorder(get().recordingConfig),
