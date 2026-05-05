@@ -1,10 +1,18 @@
 import path from "path";
+import { app } from "electron";
 
 export const getExtraResourcesFolder = () => {
   return process.env.NODE_ENV === "development"
     ? path.join(__dirname, "../../extra")
     : path.join(process.resourcesPath, "extra");
 };
+
+/**
+ * Per-user writable directory provided by Electron (`app.getPath("userData")`).
+ * Wrapped here so domain modules don't have to import from "electron"
+ * directly — keeps them easier to unit-test under plain Node.
+ */
+export const getUserDataFolder = (): string => app.getPath("userData");
 
 export const getMillisecondsFromTimeString = (time: string) => {
   if (!time) return 0;

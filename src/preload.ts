@@ -17,6 +17,9 @@ contextBridge.exposeInMainWorld("ipcApi", {
   whisperx: {
     invoke: (payload: any) => ipcRenderer.invoke("whisperx", payload),
   },
+  ffmpeg: {
+    invoke: (payload: any) => ipcRenderer.invoke("ffmpeg", payload),
+  },
   speakerProfiles: {
     invoke: (payload: any) => ipcRenderer.invoke("speakerProfiles", payload),
   },

@@ -28,6 +28,41 @@ import {
 
 log.initialize({ spyRendererConsole: true });
 
+// Electron apps launched from Finder/Spotlight (macOS) or by the Squirrel
+// shim (Windows) don't inherit the user's interactive shell PATH, so tools
+// like `uv` installed under `~/.cargo/bin`, `~/.local/bin`, or Homebrew's
+// `/opt/homebrew/bin` are invisible to `execa`. Probe a small set of known
+// install locations and prepend whichever one we find to process.env.PATH
+// so subsequent `uv sync` / `uv tool dir` calls resolve correctly. Done
+// before any IPC handler registration so the first probe call from the
+// renderer sees the patched env.
+((): void => {
+  const home = process.env.HOME || process.env.USERPROFILE;
+  if (!home) return;
+  const exe = process.platform === "win32" ? "uv.exe" : "uv";
+  const candidates = [
+    path.join(home, ".cargo", "bin"),
+    path.join(home, ".local", "bin"),
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+  ];
+  const sep = process.platform === "win32" ? ";" : ":";
+  const currentPath = process.env.PATH ?? "";
+  const seen = new Set(currentPath.split(sep).filter(Boolean));
+  const toPrepend: string[] = [];
+  for (const dir of candidates) {
+    if (seen.has(dir)) continue;
+    if (fs.existsSync(path.join(dir, exe))) {
+      toPrepend.push(dir);
+      seen.add(dir);
+    }
+  }
+  if (toPrepend.length > 0) {
+    process.env.PATH = [...toPrepend, currentPath].filter(Boolean).join(sep);
+    log.info(`[startup] prepended uv search dirs to PATH: ${toPrepend.join(", ")}`);
+  }
+})();
+
 updateElectronApp();
 
 const lock = app.requestSingleInstanceLock();

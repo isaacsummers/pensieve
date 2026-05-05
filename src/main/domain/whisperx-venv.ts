@@ -1,6 +1,6 @@
 import path from "path";
 import fs from "fs-extra";
-import { app } from "electron";
+import { getUserDataFolder } from "../../main-utils";
 
 /**
  * Project-managed WhisperX Python environment.
@@ -40,7 +40,7 @@ const getPackagedPyprojectSource = (): string =>
  */
 export const getWhisperxProjectDir = (): string => {
   if (isDev()) return path.join(getRepoRoot(), "python");
-  return path.join(app.getPath("userData"), "pensieve-whisperx");
+  return path.join(getUserDataFolder(), "pensieve-whisperx");
 };
 
 /**
@@ -112,12 +112,16 @@ export const ensureWhisperxProjectDir = async (): Promise<string> => {
 
   let needCopy = !(await fs.pathExists(dest));
   if (!needCopy) {
+    // Compare bundled vs userData copy byte-for-byte. mtime comparison is
+    // unreliable across installer types (Squirrel often preserves source
+    // mtimes; macOS DMG resets them), so a content compare is the only
+    // way to reliably notice a dependency change after an app update.
     try {
-      const [srcStat, dstStat] = await Promise.all([
-        fs.stat(source),
-        fs.stat(dest),
+      const [srcBuf, dstBuf] = await Promise.all([
+        fs.readFile(source),
+        fs.readFile(dest),
       ]);
-      if (srcStat.mtimeMs > dstStat.mtimeMs) needCopy = true;
+      if (!srcBuf.equals(dstBuf)) needCopy = true;
     } catch {
       needCopy = true;
     }

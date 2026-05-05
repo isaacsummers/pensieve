@@ -123,9 +123,11 @@ const ensureWhisperxAvailable = async (): Promise<void> => {
     if (!result.ok) {
       log.warn("WhisperX availability check failed:", result.error);
       await showWhisperxWarning();
+      // Do NOT mark as checked on failure — if the user installs whisperx
+      // mid-session via the in-app installer, the next pipeline run
+      // should re-probe instead of waiting for an app restart.
+      return;
     }
-    // Only mark as checked after the probe actually resolves, so a
-    // throw/crash doesn't permanently suppress the warning dialog.
     whisperxChecked = true;
   })();
   try {

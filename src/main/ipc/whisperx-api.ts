@@ -1,6 +1,6 @@
-import { execa } from "execa";
 import * as whisperx from "../domain/whisperx";
 import * as whisperxCuda from "../domain/whisperx-cuda";
+import * as ffmpeg from "../domain/ffmpeg";
 
 export const whisperxApi = {
   checkInstalled: async () => whisperx.checkWhisperxAvailability(),
@@ -46,22 +46,21 @@ export const whisperxApi = {
   }> => {
     const wxResult = await whisperx.checkWhisperxAvailability();
 
+    // Use the domain detector so this respects the user's configured
+    // ffmpeg.binaryPath, the bundled extra/ffmpeg.exe, Homebrew/Scoop/
+    // WinGet locations, etc. — not just whatever happens to be on PATH.
     let ffmpegResult: { ok: boolean; version?: string; error?: string };
     try {
-      const r = await execa("ffmpeg", ["-version"], {
-        stdio: "pipe",
-        timeout: 10_000,
-        reject: false,
-      });
-      if (r.exitCode === 0) {
-        const version = /ffmpeg version ([\S]+)/i.exec(
-          r.stdout + r.stderr,
-        )?.[1];
-        ffmpegResult = { ok: true, version };
+      const detected = await ffmpeg.detectFfmpeg();
+      if (detected.ok) {
+        ffmpegResult = {
+          ok: true,
+          version: detected.version ?? undefined,
+        };
       } else {
         ffmpegResult = {
           ok: false,
-          error: `ffmpeg exited with code ${r.exitCode}`,
+          error: detected.error ?? "ffmpeg not detected",
         };
       }
     } catch (err) {

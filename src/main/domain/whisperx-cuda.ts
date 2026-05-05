@@ -220,9 +220,31 @@ export const checkCudaHealthCached = async (): Promise<CudaHealthResult> => {
   if (cachedHealth) return cachedHealth;
   if (cachedHealthInFlight) return cachedHealthInFlight;
   cachedHealthInFlight = (async () => {
-    const result = await checkCudaHealth();
-    cachedHealth = result;
-    return result;
+    try {
+      const result = await checkCudaHealth();
+      cachedHealth = result;
+      return result;
+    } catch (e) {
+      // Probe failures (nvidia-smi timeout, exec error on a non-NVIDIA box,
+      // etc.) used to leave cachedHealth=null and cause every subsequent
+      // call to re-run the 2s+ probe. Cache a known-negative result so
+      // non-NVIDIA hosts don't pay that cost on every recording. The
+      // renderer can force a re-probe by calling invalidateCudaHealthCache.
+      log.warn(
+        `[whisperx-cuda] CUDA health probe failed; caching negative result: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      );
+      const negative: CudaHealthResult = {
+        hasNvidiaGpu: false,
+        cudaDriverVersion: null,
+        torchCudaAvailable: false,
+        torchVersion: null,
+        suggestedIndexUrl: null,
+      };
+      cachedHealth = negative;
+      return negative;
+    }
   })();
   try {
     return await cachedHealthInFlight;
@@ -251,7 +273,7 @@ export const checkCudaHealth = async (): Promise<CudaHealthResult> => {
 
 // --- public: reinstallCudaTorch ---------------------------------------------
 
-const INSTALL_TIMEOUT_MS = 10 * 60_000;
+const INSTALL_TIMEOUT_MS = 3 * 60_000;
 
 export const reinstallCudaTorch = async (
   indexUrl: string,
@@ -296,12 +318,55 @@ export const reinstallCudaTorch = async (
     log: "",
   };
 
+  // Patch the [[tool.uv.index]] url in pyproject.toml to match the
+  // driver-derived indexUrl before syncing, so users on cu118 / cu121 /
+  // cu124 drivers don't get the cu126 wheel hardcoded in the shipped
+  // pyproject. We restore the original file after sync so the on-disk
+  // copy matches what was bundled (avoids confusing diffs and prevents
+  // ensureWhisperxProjectDir's content-equality check from re-copying it
+  // every launch).
+  const pyprojectPath = path.join(projectDir, "pyproject.toml");
+  let originalPyproject: string | null = null;
+  try {
+    originalPyproject = await fs.readFile(pyprojectPath, "utf-8");
+    const patched = originalPyproject.replace(
+      /(\[\[tool\.uv\.index\]\][\s\S]*?url\s*=\s*")[^"]+(")/,
+      `$1${indexUrl}$2`,
+    );
+    if (patched === originalPyproject) {
+      log.warn(
+        `[whisperx-cuda] could not locate [[tool.uv.index]] url in pyproject.toml; proceeding with bundled URL`,
+      );
+    } else {
+      await fs.writeFile(pyprojectPath, patched, "utf-8");
+      appendLog(`# patched pyproject.toml index url -> ${indexUrl}\n`);
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    log.warn(
+      `[whisperx-cuda] failed to patch pyproject.toml index url (${msg}); proceeding with bundled URL`,
+    );
+  }
+
   const args = ["sync"];
 
   log.info(
-    `[whisperx-cuda] running uv sync in ${projectDir} (declared index ignored param=${indexUrl})`,
+    `[whisperx-cuda] running uv sync in ${projectDir} (target index ${indexUrl})`,
   );
   appendLog(`$ (cwd=${projectDir}) uv ${args.join(" ")}\n`);
+
+  const restorePyproject = async () => {
+    if (originalPyproject === null) return;
+    try {
+      await fs.writeFile(pyprojectPath, originalPyproject, "utf-8");
+    } catch (e) {
+      log.warn(
+        `[whisperx-cuda] failed to restore pyproject.toml: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      );
+    }
+  };
 
   try {
     const proc = execa("uv", args, {
@@ -313,6 +378,8 @@ export const reinstallCudaTorch = async (
     proc.stdout?.on("data", (d: Buffer) => appendLog(d.toString()));
     proc.stderr?.on("data", (d: Buffer) => appendLog(d.toString()));
     const r = await proc;
+
+    await restorePyproject();
 
     if (r.exitCode === 0) {
       installState = {
@@ -327,7 +394,12 @@ export const reinstallCudaTorch = async (
       invalidateCudaHealthCache();
       return { ok: true };
     }
-    const errMsg = `uv sync exited with code ${r.exitCode}`;
+    // execa sets `timedOut: true` on r when the timeout fires; the
+    // exit code in that case is null/non-zero with a SIGTERM signal.
+    const timedOut = (r as { timedOut?: boolean }).timedOut === true;
+    const errMsg = timedOut
+      ? `Installation timed out after ${INSTALL_TIMEOUT_MS / 60_000} minutes. Check your network connection and try again.`
+      : `uv sync exited with code ${r.exitCode}`;
     installState = {
       ...installState,
       inProgress: false,
@@ -337,6 +409,7 @@ export const reinstallCudaTorch = async (
     };
     return { ok: false, error: errMsg };
   } catch (e) {
+    await restorePyproject();
     const msg = e instanceof Error ? e.message : String(e);
     installState = {
       ...installState,
