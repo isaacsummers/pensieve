@@ -76,16 +76,15 @@ const captureStream = async (
 const createMicRecorder = async (
   config: RecordingConfig,
 ): Promise<MicTrack[]> => {
-  if (!config.mic) return [];
-
   const additional = config.additionalAudioDevices ?? [];
 
   // Build the full target list. The primary is always treated as an input
   // even if the underlying device kind disagrees; additional devices keep
-  // whatever kind the user picked.
+  // whatever kind the user picked. When no primary mic is configured we
+  // still proceed so additional devices can capture.
   type Target = { device: MediaDeviceInfo; isPrimary: boolean };
   const targets: Target[] = [
-    { device: config.mic, isPrimary: true },
+    ...(config.mic ? [{ device: config.mic, isPrimary: true }] : []),
     ...additional.map((d) => ({ device: d, isPrimary: false })),
   ];
 
@@ -95,8 +94,7 @@ const createMicRecorder = async (
     // eslint-disable-next-line no-await-in-loop
     const stream = await captureStream(target.device, isOutput);
     if (!stream) {
-      // Skip unusable additional devices. If the primary itself fails we
-      // still bail out below — recording silence isn't useful.
+      // Skip unusable devices; continue attempting the rest.
       // eslint-disable-next-line no-continue
       continue;
     }
@@ -111,10 +109,17 @@ const createMicRecorder = async (
     });
   }
 
-  // If the primary failed to capture, treat the whole mic recording as
-  // unavailable — caller treats `[]` as "no mic". Stop any successfully-
-  // started additional recorders so we don't leak streams.
-  if (!tracks.some((t) => t.isPrimary)) {
+  // If a primary mic was configured but failed to capture, log a warning
+  // and continue — additional devices may have succeeded.
+  if (config.mic && !tracks.some((t) => t.isPrimary)) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      "Primary mic failed to capture; continuing with additional devices only.",
+    );
+  }
+
+  // Nothing captured at all — stop any stray recorders and signal no audio.
+  if (tracks.length === 0) {
     tracks.forEach((t) => {
       try {
         t.recorder.stop();
