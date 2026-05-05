@@ -1,6 +1,12 @@
 import path from "path";
 import fs from "fs-extra";
-import { getUserDataFolder, isDevBuild } from "../../main-utils";
+import { execa } from "execa";
+import log from "electron-log/main";
+import {
+  getUserDataFolder,
+  getUvExecutable,
+  isDevBuild,
+} from "../../main-utils";
 
 /**
  * Project-managed WhisperX Python environment.
@@ -131,4 +137,77 @@ export const ensureWhisperxProjectDir = async (): Promise<string> => {
   }
 
   return dir;
+};
+
+// One-shot guard so concurrent processWavFile / availability checks don't
+// stampede `uv sync`. Resolves to `true` on success, `false` on failure;
+// callers can inspect and decide whether to surface a warning.
+let ensureVenvInFlight: Promise<boolean> | null = null;
+let ensureVenvDone = false;
+
+/**
+ * Ensure the project venv exists by running `uv sync` against the
+ * pyproject.toml on disk. No-op when the venv's whisperx entry-point
+ * already exists. Safe to call concurrently — syncs are deduplicated.
+ */
+export const ensureWhisperxVenv = async (): Promise<boolean> => {
+  if (ensureVenvDone) return true;
+  if (ensureVenvInFlight) return ensureVenvInFlight;
+
+  ensureVenvInFlight = (async () => {
+    const venvBin = getWhisperxVenvBinary();
+    const venvPython = getWhisperxVenvPython();
+    if (fs.existsSync(venvBin) || fs.existsSync(venvPython)) {
+      ensureVenvDone = true;
+      return true;
+    }
+    let projectDir: string;
+    try {
+      projectDir = await ensureWhisperxProjectDir();
+    } catch (e) {
+      log.warn(
+        `[whisperx-venv] could not prepare project dir: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      );
+      return false;
+    }
+
+    const uv = getUvExecutable();
+    log.info(
+      `[whisperx-venv] venv missing; running first-run \`uv sync\` in ${projectDir} (uv=${uv})`,
+    );
+    try {
+      const r = await execa(uv, ["sync"], {
+        cwd: projectDir,
+        stdio: "pipe",
+        timeout: 10 * 60_000,
+        reject: false,
+      });
+      if (r.exitCode === 0) {
+        log.info(`[whisperx-venv] first-run uv sync completed`);
+        ensureVenvDone = true;
+        return true;
+      }
+      log.warn(
+        `[whisperx-venv] first-run uv sync exited ${r.exitCode}: ${
+          r.stderr || r.stdout
+        }`,
+      );
+      return false;
+    } catch (e) {
+      log.warn(
+        `[whisperx-venv] first-run uv sync failed to launch: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      );
+      return false;
+    }
+  })();
+
+  try {
+    return await ensureVenvInFlight;
+  } finally {
+    ensureVenvInFlight = null;
+  }
 };

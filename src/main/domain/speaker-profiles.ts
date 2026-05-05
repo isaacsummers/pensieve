@@ -5,6 +5,7 @@ import { app } from "electron";
 import log from "electron-log/main";
 import { execa } from "execa";
 import * as settings from "./settings";
+import { getUvExecutable } from "../../main-utils";
 import { SpeakerProfile } from "../../types";
 import { invalidateUiKeys } from "../ipc/invalidate-ui";
 import { QueryKeys } from "../../query-keys";
@@ -325,7 +326,7 @@ export const checkUvAvailable = async (): Promise<{
   error?: string;
 }> => {
   try {
-    const r = await execa("uv", ["--version"], {
+    const r = await execa(getUvExecutable(), ["--version"], {
       stdio: "pipe",
       timeout: 5_000,
       reject: false,
@@ -371,11 +372,15 @@ const ensureVenv = async (): Promise<{
     const uvProbe = await checkUvAvailable();
     if (uvProbe.ok) {
       try {
-        const result = await execa("uv", ["venv", dir, "--python", "3.12"], {
-          stdio: "pipe",
-          timeout: 2 * 60_000,
-          reject: false,
-        });
+        const result = await execa(
+          getUvExecutable(),
+          ["venv", dir, "--python", "3.12"],
+          {
+            stdio: "pipe",
+            timeout: 2 * 60_000,
+            reject: false,
+          },
+        );
         if (result.exitCode === 0 && fs.existsSync(py)) {
           return { ok: true, python: py, uv: true };
         }
@@ -498,7 +503,7 @@ const uvPipInstall = async (
   if (useUv) {
     const full = ["pip", "install", "--python", python, ...args];
     log.info(`[speaker-profiles] uv ${full.join(" ")}`);
-    return execa("uv", full, {
+    return execa(getUvExecutable(), full, {
       stdio: "pipe",
       timeout: timeoutMs,
       reject: false,

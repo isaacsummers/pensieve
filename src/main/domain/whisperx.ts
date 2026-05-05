@@ -6,6 +6,7 @@ import { buildArgs, getMillisecondsFromTimeString } from "../../main-utils";
 import * as ffmpeg from "./ffmpeg";
 import * as whisperxCuda from "./whisperx-cuda";
 import {
+  ensureWhisperxVenv,
   getWhisperxVenvBinary,
   getWhisperxVenvPython,
 } from "./whisperx-venv";
@@ -82,6 +83,12 @@ export const checkWhisperxAvailability = async (): Promise<{
   error?: string;
 }> => {
   try {
+    // First-run: if the bundled venv doesn't exist yet, run `uv sync`
+    // against the shipped pyproject.toml so the user doesn't have to
+    // manually trigger the install. Best-effort — if it fails we still
+    // probe in case the user has whisperx on PATH.
+    await ensureWhisperxVenv();
+
     const settings = (await getSettings()).whisperx;
     const { cmd, prefix } = getCommand(settings);
     const { execa } = await import("execa");

@@ -28,6 +28,18 @@ export const isDevBuild = (): boolean => {
   return result;
 };
 
+/**
+ * Path to the uv binary the app should invoke for `uv sync` / `uv venv`
+ * etc. In packaged mode we ship a per-platform uv binary in extraResources
+ * so users don't have to install uv system-wide. In dev we trust whatever
+ * is on PATH (the developer presumably has uv installed).
+ */
+export const getUvExecutable = (): string => {
+  if (isDevBuild()) return "uv";
+  const binary = process.platform === "win32" ? "uv.exe" : "uv";
+  return path.join(getExtraResourcesFolder(), binary);
+};
+
 export const getMillisecondsFromTimeString = (time: string) => {
   if (!time) return 0;
   const [h, m, s, ms] = time.split(/[:.]/).map(Number);

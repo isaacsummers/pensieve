@@ -10,10 +10,133 @@ import { FusesPlugin } from "@electron-forge/plugin-fuses";
 import { FuseV1Options, FuseVersion } from "@electron/fuses";
 import fs from "fs-extra";
 import path from "path";
+import os from "os";
+import { execSync } from "child_process";
 import { Resvg } from "@resvg/resvg-js";
 import pngToIco from "png-to-ico";
 // Note: ffmpeg is NOT bundled by the build system. Users must supply it
 // via the Dependencies panel (Windows) or their system package manager.
+
+// Pinned uv version. Bumping this is the trigger for a re-download on the
+// next build (we compare against extra/uv-version.txt and skip the download
+// when it matches the existing binary).
+const UV_VERSION = "0.6.16";
+
+const getUvAssetForPlatform = (): {
+  url: string;
+  archive: string;
+  binary: string;
+} => {
+  const platform = process.platform;
+  const arch = process.arch;
+  const base = `https://github.com/astral-sh/uv/releases/download/${UV_VERSION}`;
+  if (platform === "win32" && arch === "x64") {
+    return {
+      url: `${base}/uv-x86_64-pc-windows-msvc.zip`,
+      archive: "uv.zip",
+      binary: "uv.exe",
+    };
+  }
+  if (platform === "darwin" && arch === "arm64") {
+    return {
+      url: `${base}/uv-aarch64-apple-darwin.tar.gz`,
+      archive: "uv.tar.gz",
+      binary: "uv",
+    };
+  }
+  if (platform === "darwin" && arch === "x64") {
+    return {
+      url: `${base}/uv-x86_64-apple-darwin.tar.gz`,
+      archive: "uv.tar.gz",
+      binary: "uv",
+    };
+  }
+  if (platform === "linux" && arch === "x64") {
+    return {
+      url: `${base}/uv-x86_64-unknown-linux-gnu.tar.gz`,
+      archive: "uv.tar.gz",
+      binary: "uv",
+    };
+  }
+  if (platform === "linux" && arch === "arm64") {
+    return {
+      url: `${base}/uv-aarch64-unknown-linux-gnu.tar.gz`,
+      archive: "uv.tar.gz",
+      binary: "uv",
+    };
+  }
+  throw new Error(
+    `No prebuilt uv binary configured for ${platform}/${arch}. Add a mapping in forge.config.ts.`,
+  );
+};
+
+/**
+ * Download + extract the uv release asset for the build host's platform
+ * into `extra/`. We bundle uv so the packaged app can manage the WhisperX
+ * Python project without requiring users to install uv system-wide.
+ *
+ * Skips the download when extra/uv-version.txt matches UV_VERSION and the
+ * binary still exists — cheap re-runs of `generateAssets`.
+ */
+const downloadUv = async (extraDir: string): Promise<void> => {
+  const { url, archive, binary } = getUvAssetForPlatform();
+  const versionFile = path.join(extraDir, "uv-version.txt");
+  const binaryPath = path.join(extraDir, binary);
+
+  if (
+    (await fs.pathExists(versionFile)) &&
+    (await fs.pathExists(binaryPath)) &&
+    (await fs.readFile(versionFile, "utf-8")).trim() === UV_VERSION
+  ) {
+    return;
+  }
+
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "pensieve-uv-"));
+  try {
+    const archivePath = path.join(tmpDir, archive);
+    // eslint-disable-next-line no-console
+    console.log(`[uv] downloading ${url}`);
+    const res = await fetch(url);
+    if (!res.ok || !res.body) {
+      throw new Error(`uv download failed (${res.status} ${res.statusText})`);
+    }
+    const buf = Buffer.from(await res.arrayBuffer());
+    await fs.writeFile(archivePath, buf);
+
+    // bsdtar (shipped on Win10+, macOS, Linux) handles both .zip and .tar.gz.
+    execSync(`tar -xf "${archivePath}" -C "${tmpDir}"`, { stdio: "inherit" });
+
+    // Locate the extracted binary (may sit at the archive root or nested
+    // under a release-name directory).
+    const findBinary = async (dir: string): Promise<string | null> => {
+      const entries = await fs.readdir(dir, { withFileTypes: true });
+      for (const e of entries) {
+        const full = path.join(dir, e.name);
+        if (e.isFile() && e.name === binary) return full;
+        if (e.isDirectory()) {
+          const nested = await findBinary(full);
+          if (nested) return nested;
+        }
+      }
+      return null;
+    };
+    const extracted = await findBinary(tmpDir);
+    if (!extracted) {
+      throw new Error(
+        `uv binary "${binary}" not found in extracted ${archive}`,
+      );
+    }
+    await fs.copy(extracted, binaryPath, { overwrite: true });
+    if (process.platform !== "win32") {
+      await fs.chmod(binaryPath, 0o755);
+    }
+    await fs.writeFile(versionFile, UV_VERSION, "utf-8");
+    // eslint-disable-next-line no-console
+    console.log(`[uv] bundled ${binary} ${UV_VERSION} into ${extraDir}`);
+  } finally {
+    await fs.remove(tmpDir).catch(() => {});
+  }
+};
 
 const createIcon = async (factor: number, base = 32) => {
   const source = await fs.readFile(path.join(__dirname, "./icon.svg"), "utf-8");
@@ -128,6 +251,10 @@ const config: ForgeConfig = {
         path.join(__dirname, "extra", "whisperx-pyproject.toml"),
         { overwrite: true },
       );
+
+      // Download + bundle uv so the packaged app doesn't depend on a
+      // system-wide uv install.
+      await downloadUv(target);
     },
   },
 };

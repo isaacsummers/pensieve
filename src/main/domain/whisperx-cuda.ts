@@ -3,6 +3,7 @@ import fs from "fs-extra";
 import { execa } from "execa";
 import log from "electron-log/main";
 import { getSettings } from "./settings";
+import { getUvExecutable } from "../../main-utils";
 import {
   ensureWhisperxProjectDir,
   getWhisperxVenvPython,
@@ -129,7 +130,7 @@ export const resolveWhisperxPython = async (): Promise<string | null> => {
   }
 
   try {
-    const r = await execa("uv", ["tool", "dir", "whisperx"], {
+    const r = await execa(getUvExecutable(), ["tool", "dir", "whisperx"], {
       stdio: "pipe",
       timeout: 10_000,
       reject: false,
@@ -369,7 +370,7 @@ export const reinstallCudaTorch = async (
   };
 
   try {
-    const proc = execa("uv", args, {
+    const proc = execa(getUvExecutable(), args, {
       cwd: projectDir,
       stdio: "pipe",
       timeout: INSTALL_TIMEOUT_MS,
