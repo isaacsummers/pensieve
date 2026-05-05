@@ -109,6 +109,11 @@ export type RecordingMeta = {
   >;
   /** Raw per-speaker embedding vectors from the last diarization pass. */
   speakerEmbeddings?: Record<string, number[]>;
+  /**
+   * Per-recording sticky rejections: speakerKey → array of profileIds the user
+   * explicitly dismissed for this recording. Prevents re-surfacing the pill.
+   */
+  rejectedSuggestions?: Record<string, string[]>;
   /** Most recent non-fatal pipeline error surfaced on this recording. */
   pipelineError?: { stage: string; message: string } | null;
 };
@@ -239,6 +244,8 @@ export const defaultSettings = {
       enabled: true,
       pythonPath: "",
       scriptPath: "",
+      autoConfirmThreshold: 0.80,
+      suggestThreshold: 0.65,
       matchThreshold: 0.75,
       minSpeakerSeconds: 0.3,
     },

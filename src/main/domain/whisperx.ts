@@ -466,19 +466,54 @@ export const runSpeakerEmbeddingPipeline = async (params: {
       segments: params.segments,
     });
     const matches: Record<string, speakerProfiles.SpeakerMatch> = {};
-    const names: Record<string, string> = {};
-    const threshold = settings.embeddings.matchThreshold ?? 0.75;
+    const autoConfirmThreshold =
+      settings.embeddings.autoConfirmThreshold ??
+      settings.embeddings.matchThreshold ??
+      0.80;
+    const suggestThreshold =
+      settings.embeddings.suggestThreshold ??
+      Math.min(0.65, autoConfirmThreshold - 0.10);
+
     for (const [speakerKey, embedding] of Object.entries(result.embeddings)) {
-      const match = await speakerProfiles.matchSpeaker(embedding, threshold);
-      matches[speakerKey] = match;
-      if (match.matched && match.profileName) {
-        names[speakerKey] = match.profileName;
+      // matchSpeaker with threshold=0 so it always returns the best candidate
+      // with its raw confidence; we apply the two-tier logic ourselves.
+      const match = await speakerProfiles.matchSpeaker(embedding, 0);
+
+      if (match.profileId && match.confidence >= autoConfirmThreshold) {
+        // Auto-confirm: mark as matched, apply running-mean embedding update.
+        matches[speakerKey] = { ...match, matched: true };
+        // Apply running-mean update to the profile — fire-and-forget any
+        // errors so a bad update doesn't kill the whole pipeline.
+        try {
+          await speakerProfiles.upsertProfile({
+            id: match.profileId,
+            name: match.profileName ?? "",
+            embedding,
+            sampleCount: 1, // ignored when useRunningMean=true
+            useRunningMean: true,
+          });
+        } catch (e) {
+          log.warn(
+            `[embed] running-mean update failed for profile ${match.profileId}:`,
+            e,
+          );
+        }
+        // NOTE: We intentionally do NOT write speakerNames[speakerKey] here.
+        // The display name is now resolved live from the profile at render
+        // time via speakerMatches[key].profileId lookup.
+      } else if (match.profileId && match.confidence >= suggestThreshold) {
+        // Suggest tier: store the best match but leave matched=false so the
+        // UI surfaces the confirmation pill.
+        matches[speakerKey] = { ...match, matched: false };
+      } else {
+        // Below both thresholds: store closest but mark as no-match.
+        matches[speakerKey] = { ...match, matched: false };
       }
     }
     return {
       speakerEmbeddings: result.embeddings,
       speakerMatches: matches,
-      speakerNames: Object.keys(names).length ? names : undefined,
+      // No speakerNames written — names now resolve from profiles at render.
       pipelineError: null,
     };
   } catch (e) {

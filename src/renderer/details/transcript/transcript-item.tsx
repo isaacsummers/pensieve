@@ -1,4 +1,5 @@
 import { memo, useCallback, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { RecordingMeta, RecordingTranscriptItem } from "../../../types";
 import { useManagedAudio } from "../use-managed-audio";
 import { isInRange, useEvent } from "../../../utils";
@@ -6,6 +7,10 @@ import { speakerProfilesApi } from "../../api";
 import { TranscriptItemUi } from "./transcript-item-ui";
 import { Screenshot } from "./screenshot";
 import { TimeframedComment } from "./timeframed-comment";
+import { QueryKeys } from "../../../query-keys";
+
+/** Default suggest threshold used when settings have not yet loaded. */
+const DEFAULT_SUGGEST_THRESHOLD = 0.65;
 
 export const TranscriptItem = memo<{
   item: RecordingTranscriptItem;
@@ -164,8 +169,59 @@ export const TranscriptItem = memo<{
       [recordingId, item.speaker, updateMeta],
     );
 
-    const speakerDisplayName = meta.speakerNames?.[item.speaker];
+    // --- speaker profiles for live name resolution --------------------------
+
+    const { data: allProfiles } = useQuery({
+      queryKey: [QueryKeys.SpeakerProfiles],
+      queryFn: speakerProfilesApi.list,
+      staleTime: 60_000,
+    });
+
+    const profilesById = useMemo(() => {
+      const map: Record<string, { name: string }> = {};
+      for (const p of allProfiles ?? []) {
+        map[p.id] = { name: p.name };
+      }
+      return map;
+    }, [allProfiles]);
+
     const speakerMatch = meta.speakerMatches?.[item.speaker];
+
+    /**
+     * Resolution order:
+     *  1. Explicit per-recording override (user typed a custom name)
+     *  2. Live profile name lookup via speakerMatches profileId
+     *  3. undefined (SpeakerTitle will fall back to "Speaker N")
+     */
+    const speakerDisplayName =
+      meta.speakerNames?.[item.speaker] ??
+      (speakerMatch?.profileId
+        ? profilesById[speakerMatch.profileId]?.name
+        : undefined);
+
+    const onConfirmSpeakerMatch = useCallback(
+      async (profileId: string) => {
+        const nextMatches = await speakerProfilesApi.confirmSpeakerMatch(
+          recordingId,
+          item.speaker,
+          profileId,
+        );
+        await updateMeta({ speakerMatches: nextMatches });
+      },
+      [recordingId, item.speaker, updateMeta],
+    );
+
+    const onRejectSpeakerSuggestion = useCallback(
+      async (profileId: string) => {
+        const nextMatches = await speakerProfilesApi.rejectSpeakerSuggestion(
+          recordingId,
+          item.speaker,
+          profileId,
+        );
+        await updateMeta({ speakerMatches: nextMatches });
+      },
+      [recordingId, item.speaker, updateMeta],
+    );
 
     return (
       <TranscriptItemUi
@@ -176,6 +232,10 @@ export const TranscriptItem = memo<{
         speakerMatch={speakerMatch}
         onRenameSpeaker={onRenameSpeaker}
         onSaveSpeakerProfile={onSaveAsProfile}
+        onConfirmSpeakerMatch={onConfirmSpeakerMatch}
+        onRejectSpeakerSuggestion={onRejectSpeakerSuggestion}
+        suggestThreshold={DEFAULT_SUGGEST_THRESHOLD}
+        rejectedSuggestions={meta.rejectedSuggestions?.[item.speaker]}
         isProgressAtItem={isProgressAtItem}
         isAudioPlaying={audio.isPlaying}
         isHighlighted={!!isHighlighted}

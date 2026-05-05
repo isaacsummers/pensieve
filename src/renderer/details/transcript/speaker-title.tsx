@@ -2,6 +2,7 @@ import { FC, useEffect, useRef, useState } from "react";
 import {
   Avatar,
   Badge,
+  Button,
   Flex,
   IconButton,
   Text,
@@ -37,7 +38,26 @@ export const SpeakerTitle: FC<{
   };
   onRename?: (name: string) => Promise<void> | void;
   onSaveProfile?: (name: string) => Promise<void> | void;
-}> = ({ timeText, speaker, displayName, match, onRename, onSaveProfile }) => {
+  /** Called when the user clicks ✓ on a suggestion pill. */
+  onConfirmMatch?: (profileId: string) => Promise<void> | void;
+  /** Called when the user clicks ✗ on a suggestion pill. */
+  onRejectSuggestion?: (profileId: string) => Promise<void> | void;
+  /** Minimum confidence to show the suggestion pill (default 0.65). */
+  suggestThreshold?: number;
+  /** Profile IDs the user has already rejected for this speaker/recording. */
+  rejectedSuggestions?: string[];
+}> = ({
+  timeText,
+  speaker,
+  displayName,
+  match,
+  onRename,
+  onSaveProfile,
+  onConfirmMatch,
+  onRejectSuggestion,
+  suggestThreshold = 0.65,
+  rejectedSuggestions,
+}) => {
   const effective = displayName?.trim() || defaultLabel(speaker);
   const [isEditing, setIsEditing] = useState(false);
   const [value, setValue] = useState(effective);
@@ -75,6 +95,20 @@ export const SpeakerTitle: FC<{
   ) : (
     <Avatar fallback={effective.slice(0, 1).toUpperCase()} size="2" />
   );
+
+  /**
+   * Determine whether to show the suggestion pill:
+   * - Match exists and is NOT confirmed (matched=false)
+   * - Has a profileId and profileName
+   * - Confidence is at/above the suggest threshold
+   * - The profile has not been rejected on this recording
+   */
+  const showSuggestionPill =
+    !match?.matched &&
+    match?.profileId != null &&
+    match?.profileName != null &&
+    match.confidence >= suggestThreshold &&
+    !(rejectedSuggestions ?? []).includes(match.profileId);
 
   return (
     <Flex align="center" gap=".5rem" className="hoverhide-container">
@@ -125,18 +159,61 @@ export const SpeakerTitle: FC<{
           <Text weight="bold" style={{ flexGrow: 1 }}>
             {effective}
           </Text>
-          {match?.matched && match.profileName && (
+          {match?.matched && (
             <Tooltip
-              content={`Auto-labeled from profile \u201C${match.profileName}\u201D (similarity ${match.confidence.toFixed(2)})`}
+              content={`Auto-labeled from profile \u201C${
+                match.profileName ?? effective
+              }\u201D (similarity ${match.confidence.toFixed(2)})`}
             >
               <Badge color="jade" variant="soft">
-                auto · {Math.round(match.confidence * 100)}%
+                auto \u00b7 {Math.round(match.confidence * 100)}%
               </Badge>
             </Tooltip>
           )}
-          {match && !match.matched && match.profileName && (
+          {showSuggestionPill && match && (
+            <Flex align="center" gap=".25rem">
+              <Tooltip
+                content={`Voice matches profile \u201C${match.profileName}\u201D with ${Math.round(match.confidence * 100)}% similarity. Confirm to link this speaker to the profile.`}
+              >
+                <Badge color="amber" variant="soft">
+                  Suggested: {match.profileName} ({Math.round(match.confidence * 100)}%)
+                </Badge>
+              </Tooltip>
+              <Tooltip content="Confirm: link this speaker to the suggested profile">
+                <IconButton
+                  size="1"
+                  variant="ghost"
+                  color="green"
+                  aria-label="Confirm speaker suggestion"
+                  onClick={() =>
+                    match.profileId && onConfirmMatch?.(match.profileId)
+                  }
+                >
+                  <HiCheck />
+                </IconButton>
+              </Tooltip>
+              <Tooltip content="Dismiss suggestion for this recording">
+                <IconButton
+                  size="1"
+                  variant="ghost"
+                  color="red"
+                  aria-label="Reject speaker suggestion"
+                  onClick={() =>
+                    match.profileId && onRejectSuggestion?.(match.profileId)
+                  }
+                >
+                  <HiOutlineXMark />
+                </IconButton>
+              </Tooltip>
+            </Flex>
+          )}
+          {!match?.matched && !showSuggestionPill && match && (
             <Tooltip
-              content={`Closest profile \u201C${match.profileName}\u201D scored ${match.confidence.toFixed(2)} (below threshold)`}
+              content={
+                match.profileName
+                  ? `Closest profile \u201C${match.profileName}\u201D scored ${match.confidence.toFixed(2)} (below threshold)`
+                  : "No voice profile matched this speaker"
+              }
             >
               <Badge color="gray" variant="soft">
                 no match

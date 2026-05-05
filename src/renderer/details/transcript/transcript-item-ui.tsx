@@ -20,6 +20,10 @@ export const TranscriptItemUi = memo<{
   };
   onRenameSpeaker?: (name: string) => Promise<void> | void;
   onSaveSpeakerProfile?: (name: string) => Promise<void> | void;
+  onConfirmSpeakerMatch?: (profileId: string) => Promise<void> | void;
+  onRejectSpeakerSuggestion?: (profileId: string) => Promise<void> | void;
+  suggestThreshold?: number;
+  rejectedSuggestions?: string[];
   isProgressAtItem: boolean;
   isAudioPlaying: boolean;
   isHighlighted: boolean;
@@ -37,6 +41,10 @@ export const TranscriptItemUi = memo<{
     speakerMatch,
     onRenameSpeaker,
     onSaveSpeakerProfile,
+    onConfirmSpeakerMatch,
+    onRejectSpeakerSuggestion,
+    suggestThreshold,
+    rejectedSuggestions,
     isProgressAtItem,
     isAudioPlaying,
     isHighlighted,
@@ -56,6 +64,10 @@ export const TranscriptItemUi = memo<{
           match={speakerMatch}
           onRename={onRenameSpeaker}
           onSaveProfile={onSaveSpeakerProfile}
+          onConfirmMatch={onConfirmSpeakerMatch}
+          onRejectSuggestion={onRejectSpeakerSuggestion}
+          suggestThreshold={suggestThreshold}
+          rejectedSuggestions={rejectedSuggestions}
         />
       )}
       <Box

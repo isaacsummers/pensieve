@@ -6,9 +6,10 @@ import log from "electron-log/main";
 import { execa } from "execa";
 import * as settings from "./settings";
 import { getUvExecutable } from "../../main-utils";
-import { SpeakerProfile } from "../../types";
+import { SpeakerProfile, RecordingMeta } from "../../types";
 import { invalidateUiKeys } from "../ipc/invalidate-ui";
 import { QueryKeys } from "../../query-keys";
+import * as history from "./history";
 
 const profilesFile = () =>
   path.join(app.getPath("userData"), "speaker-profiles.json");
@@ -71,9 +72,32 @@ export const setLastError = async (
   await write(s);
 };
 
+/**
+ * Compute a running-mean embedding update and L2-normalize the result.
+ * Used when confirming a speaker match to refine the profile vector over time.
+ */
+export const updateProfileEmbedding = (
+  profile: SpeakerProfile,
+  newEmbedding: number[],
+): SpeakerProfile => {
+  const count = profile.sampleCount ?? 1;
+  const updated = profile.embedding.map(
+    (v, i) => (v * count + (newEmbedding[i] ?? 0)) / (count + 1),
+  );
+  // L2 normalize so cosine-similarity comparisons remain well-conditioned.
+  const norm = Math.sqrt(updated.reduce((s, v) => s + v * v, 0));
+  const normalized = norm > 0 ? updated.map((v) => v / norm) : updated;
+  return {
+    ...profile,
+    embedding: normalized,
+    sampleCount: count + 1,
+    updatedAt: new Date().toISOString(),
+  };
+};
+
 export const upsertProfile = async (
   profile: Omit<SpeakerProfile, "id" | "createdAt" | "updatedAt"> &
-    Partial<Pick<SpeakerProfile, "id">>,
+    Partial<Pick<SpeakerProfile, "id">> & { useRunningMean?: boolean },
 ): Promise<SpeakerProfile> => {
   const s = await read();
   const now = new Date().toISOString();
@@ -82,8 +106,17 @@ export const upsertProfile = async (
     : undefined;
   if (existing) {
     existing.name = profile.name;
-    existing.embedding = profile.embedding;
-    existing.sampleCount = profile.sampleCount ?? existing.sampleCount ?? 1;
+    // When called from a confirmation flow, use running-mean to refine the
+    // embedding. When called from a manual "save as profile" flow, overwrite
+    // directly (the caller passes useRunningMean: false or leaves it unset).
+    if (profile.useRunningMean) {
+      const updated = updateProfileEmbedding(existing, profile.embedding);
+      existing.embedding = updated.embedding;
+      existing.sampleCount = updated.sampleCount;
+    } else {
+      existing.embedding = profile.embedding;
+      existing.sampleCount = profile.sampleCount ?? existing.sampleCount ?? 1;
+    }
     existing.updatedAt = now;
     await write(s);
     return existing;
@@ -982,4 +1015,88 @@ export const matchSpeaker = async (
     confidence,
     matched: confidence >= threshold,
   };
+};
+
+/**
+ * Confirm a speaker suggestion: mark the match as confirmed, apply a
+ * running-mean embedding update on the matched profile, and persist both
+ * the recording meta and the updated profile. Does NOT write speakerNames —
+ * the display name is now resolved live from the profile at render time.
+ *
+ * Returns the updated speakerMatches record so the caller can push it into
+ * the renderer via updateMeta.
+ */
+export const confirmSpeakerMatch = async (
+  recordingId: string,
+  speakerKey: string,
+  profileId: string,
+): Promise<RecordingMeta["speakerMatches"]> => {
+  const meta = await history.getRecordingMeta(recordingId);
+  const embedding = meta.speakerEmbeddings?.[speakerKey];
+
+  const s = await read();
+  const profile = s.profiles.find((p) => p.id === profileId);
+  if (!profile) throw new Error(`profile ${profileId} not found`);
+
+  // Running-mean embedding update — only when we have an embedding for this
+  // speaker on this recording.
+  if (embedding) {
+    const updated = updateProfileEmbedding(profile, embedding);
+    profile.embedding = updated.embedding;
+    profile.sampleCount = updated.sampleCount;
+    profile.updatedAt = updated.updatedAt;
+    await write(s);
+    await invalidateUiKeys(QueryKeys.SpeakerProfiles);
+  }
+
+  const nextMatches: NonNullable<RecordingMeta["speakerMatches"]> = {
+    ...(meta.speakerMatches ?? {}),
+    [speakerKey]: {
+      profileId: profile.id,
+      profileName: profile.name,
+      confidence: meta.speakerMatches?.[speakerKey]?.confidence ?? 1,
+      matched: true,
+    },
+  };
+
+  await history.updateRecording(recordingId, { speakerMatches: nextMatches });
+  return nextMatches;
+};
+
+/**
+ * Reject a speaker suggestion: record the rejection on the recording so the
+ * suggestion pill is not shown again. Does not modify the profile store.
+ *
+ * Returns the updated speakerMatches record.
+ */
+export const rejectSpeakerSuggestion = async (
+  recordingId: string,
+  speakerKey: string,
+  profileId: string,
+): Promise<RecordingMeta["speakerMatches"]> => {
+  const meta = await history.getRecordingMeta(recordingId);
+
+  const prevRejected = meta.rejectedSuggestions ?? {};
+  const keyRejected = prevRejected[speakerKey] ?? [];
+  const nextRejected = {
+    ...prevRejected,
+    [speakerKey]: [...new Set([...keyRejected, profileId])],
+  };
+
+  // Also clear the match entry so it doesn't linger as a stale suggestion.
+  const nextMatches: NonNullable<RecordingMeta["speakerMatches"]> = {
+    ...(meta.speakerMatches ?? {}),
+    [speakerKey]: {
+      profileId: null,
+      profileName: null,
+      confidence: meta.speakerMatches?.[speakerKey]?.confidence ?? 0,
+      matched: false,
+    },
+  };
+
+  await history.updateRecording(recordingId, {
+    speakerMatches: nextMatches,
+    rejectedSuggestions: nextRejected,
+  });
+  return nextMatches;
 };

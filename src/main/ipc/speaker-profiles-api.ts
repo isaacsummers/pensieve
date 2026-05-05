@@ -71,4 +71,25 @@ export const speakerProfilesApi = {
     await history.updateRecording(recordingId, { speakerNames: next });
     return next;
   },
+
+  /**
+   * Confirm a speaker suggestion: mark the match as confirmed, apply a
+   * running-mean embedding update on the matched profile, and persist both.
+   * Returns updated speakerMatches so the renderer can update its local state.
+   */
+  confirmSpeakerMatch: async (
+    recordingId: string,
+    speakerKey: string,
+    profileId: string,
+  ) => profiles.confirmSpeakerMatch(recordingId, speakerKey, profileId),
+
+  /**
+   * Reject a speaker suggestion: record the rejection so the pill is not
+   * shown again. Returns updated speakerMatches.
+   */
+  rejectSpeakerSuggestion: async (
+    recordingId: string,
+    speakerKey: string,
+    profileId: string,
+  ) => profiles.rejectSpeakerSuggestion(recordingId, speakerKey, profileId),
 };

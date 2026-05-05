@@ -300,11 +300,19 @@ export const WhisperSettings: FC = () => {
         description="Override the bundled `embed_speakers.py`. Leave blank to use the default location."
       />
       <SettingsTextField
-        {...form.register("whisperx.embeddings.matchThreshold", {
+        {...form.register("whisperx.embeddings.autoConfirmThreshold", {
           valueAsNumber: true,
         })}
-        label="Match threshold"
-        description="Cosine similarity required to auto-label a speaker (0 – 1). Typical: 0.70 – 0.80."
+        label="Auto-confirm threshold"
+        description="Cosine similarity at which a speaker is auto-labeled without prompting (0 – 1). Default: 0.80."
+        type="number"
+      />
+      <SettingsTextField
+        {...form.register("whisperx.embeddings.suggestThreshold", {
+          valueAsNumber: true,
+        })}
+        label="Suggest threshold"
+        description="Cosine similarity at which a suggestion pill is shown for manual confirmation (0 – 1). Default: 0.65. Must be below the auto-confirm threshold."
         type="number"
       />
       {/* eslint-disable-next-line @typescript-eslint/no-use-before-define */}
