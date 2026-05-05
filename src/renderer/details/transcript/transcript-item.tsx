@@ -223,6 +223,30 @@ export const TranscriptItem = memo<{
       [recordingId, item.speaker, updateMeta],
     );
 
+    const onAssignSpeakerToProfile = useCallback(
+      async (profileId: string) => {
+        const result = await speakerProfilesApi.assignSpeakerToProfile(
+          recordingId,
+          item.speaker,
+          profileId,
+        );
+        if (result.profile) {
+          await updateMeta({
+            speakerMatches: {
+              ...(meta.speakerMatches ?? {}),
+              [item.speaker]: {
+                profileId: result.profile.id,
+                profileName: result.profile.name,
+                confidence: 1.0,
+                matched: true,
+              },
+            },
+          });
+        }
+      },
+      [recordingId, item.speaker, updateMeta, meta.speakerMatches],
+    );
+
     return (
       <TranscriptItemUi
         key={item.timestamps.from}
@@ -234,6 +258,8 @@ export const TranscriptItem = memo<{
         onSaveSpeakerProfile={onSaveAsProfile}
         onConfirmSpeakerMatch={onConfirmSpeakerMatch}
         onRejectSpeakerSuggestion={onRejectSpeakerSuggestion}
+        onAssignSpeakerToProfile={onAssignSpeakerToProfile}
+        recordingId={recordingId}
         suggestThreshold={DEFAULT_SUGGEST_THRESHOLD}
         rejectedSuggestions={meta.rejectedSuggestions?.[item.speaker]}
         isProgressAtItem={isProgressAtItem}

@@ -7,6 +7,10 @@ import log from "electron-log/main";
 import { PostProcessingJob } from "../../types";
 import { getSettings } from "./settings";
 import * as history from "./history";
+import {
+  loadProfilesById,
+  resolveSpeakerDisplayName,
+} from "./speaker-profiles";
 
 let relativeBase: string | undefined;
 
@@ -65,9 +69,34 @@ export const runDatahooks = async (job: PostProcessingJob) => {
   const settings = await getSettings();
   const transcript = await history.getRecordingTranscript(job.recordingId);
   const recording = await history.getRecordingMeta(job.recordingId);
+
+  // Build a speaker key -> display name map using the shared resolver.
+  const profilesById = await loadProfilesById();
+  const speakerKeys = [
+    ...new Set(
+      (transcript?.transcription ?? []).map((t) => t.speaker).filter(Boolean),
+    ),
+  ];
+  const speakersMap = Object.fromEntries(
+    speakerKeys.map((k) => [
+      k,
+      resolveSpeakerDisplayName(k, recording, profilesById),
+    ]),
+  );
+
+  // Register a convenient Handlebars helper so templates can write
+  // {{speakerName speaker}} instead of {{lookup speakersMap speaker}}.
+  Handlebars.registerHelper("speakerName", (key: string) => speakersMap[key] ?? key);
+
   const globalParams = {
     ...recording,
-    transcript: transcript?.transcription,
+    // Augment each transcript item with a resolved speakerName field while
+    // keeping the raw speaker key intact for backwards compatibility.
+    transcript: transcript?.transcription.map((t) => ({
+      ...t,
+      speakerName: resolveSpeakerDisplayName(t.speaker, recording, profilesById),
+    })),
+    speakersMap,
     date: recording.started,
     homedir: os.userInfo().homedir,
   } as any;

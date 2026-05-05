@@ -22,6 +22,9 @@ export const TranscriptItemUi = memo<{
   onSaveSpeakerProfile?: (name: string) => Promise<void> | void;
   onConfirmSpeakerMatch?: (profileId: string) => Promise<void> | void;
   onRejectSpeakerSuggestion?: (profileId: string) => Promise<void> | void;
+  onAssignSpeakerToProfile?: (profileId: string) => Promise<void> | void;
+  onSuggestEmbeddingUpdate?: (profileId: string) => void;
+  recordingId?: string;
   suggestThreshold?: number;
   rejectedSuggestions?: string[];
   isProgressAtItem: boolean;
@@ -43,6 +46,9 @@ export const TranscriptItemUi = memo<{
     onSaveSpeakerProfile,
     onConfirmSpeakerMatch,
     onRejectSpeakerSuggestion,
+    onAssignSpeakerToProfile,
+    onSuggestEmbeddingUpdate,
+    recordingId,
     suggestThreshold,
     rejectedSuggestions,
     isProgressAtItem,
@@ -66,6 +72,9 @@ export const TranscriptItemUi = memo<{
           onSaveProfile={onSaveSpeakerProfile}
           onConfirmMatch={onConfirmSpeakerMatch}
           onRejectSuggestion={onRejectSpeakerSuggestion}
+          onAssignToProfile={onAssignSpeakerToProfile}
+          onSuggestEmbeddingUpdate={onSuggestEmbeddingUpdate}
+          recordingId={recordingId}
           suggestThreshold={suggestThreshold}
           rejectedSuggestions={rejectedSuggestions}
         />

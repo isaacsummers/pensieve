@@ -13,10 +13,12 @@ import {
   HiCheck,
   HiMiniPencilSquare,
   HiOutlineBookmarkSquare,
+  HiOutlineIdentification,
   HiOutlineUserCircle,
   HiOutlineUserGroup,
   HiOutlineXMark,
 } from "react-icons/hi2";
+import { SpeakerDirectoryPicker } from "./speaker-directory-picker";
 
 const defaultLabel = (speakerKey: string) => {
   if (speakerKey === "0") return "They";
@@ -42,10 +44,16 @@ export const SpeakerTitle: FC<{
   onConfirmMatch?: (profileId: string) => Promise<void> | void;
   /** Called when the user clicks ✗ on a suggestion pill. */
   onRejectSuggestion?: (profileId: string) => Promise<void> | void;
+  /** Called when the user assigns a speaker to a profile via the directory picker. */
+  onAssignToProfile?: (profileId: string) => Promise<void> | void;
+  /** Called when the assignment suggests an embedding update is available. */
+  onSuggestEmbeddingUpdate?: (profileId: string) => void;
   /** Minimum confidence to show the suggestion pill (default 0.65). */
   suggestThreshold?: number;
   /** Profile IDs the user has already rejected for this speaker/recording. */
   rejectedSuggestions?: string[];
+  /** recordingId, needed to pass to the picker for assignment. */
+  recordingId?: string;
 }> = ({
   timeText,
   speaker,
@@ -55,12 +63,16 @@ export const SpeakerTitle: FC<{
   onSaveProfile,
   onConfirmMatch,
   onRejectSuggestion,
+  onAssignToProfile,
+  onSuggestEmbeddingUpdate,
   suggestThreshold = 0.65,
   rejectedSuggestions,
+  recordingId,
 }) => {
   const effective = displayName?.trim() || defaultLabel(speaker);
   const [isEditing, setIsEditing] = useState(false);
   const [value, setValue] = useState(effective);
+  const [showPicker, setShowPicker] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -111,6 +123,7 @@ export const SpeakerTitle: FC<{
     !(rejectedSuggestions ?? []).includes(match.profileId);
 
   return (
+    <>
     <Flex align="center" gap=".5rem" className="hoverhide-container">
       {avatar}
       {isEditing ? (
@@ -246,9 +259,37 @@ export const SpeakerTitle: FC<{
               </IconButton>
             </Tooltip>
           )}
+          {/* Identify button — show when the speaker isn't fully matched yet */}
+          {!match?.matched && onAssignToProfile && recordingId && (
+            <Tooltip content="Identify this speaker from your profile directory">
+              <IconButton
+                variant="ghost"
+                size="1"
+                className="hoverhide-item"
+                onClick={() => setShowPicker(true)}
+                aria-label="Identify speaker"
+              >
+                <HiOutlineIdentification />
+              </IconButton>
+            </Tooltip>
+          )}
           <Text color="gray">{timeText}</Text>
         </>
       )}
     </Flex>
+    {showPicker && recordingId && onAssignToProfile && (
+      <SpeakerDirectoryPicker
+        speakerKey={speaker}
+        recordingId={recordingId}
+        currentProfileId={match?.profileId ?? undefined}
+        onAssigned={async (profileId) => {
+          setShowPicker(false);
+          await onAssignToProfile(profileId);
+        }}
+        onClose={() => setShowPicker(false)}
+        onSuggestEmbeddingUpdate={onSuggestEmbeddingUpdate}
+      />
+    )}
+  </>
   );
 };

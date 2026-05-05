@@ -4,6 +4,7 @@ import {
   HiMiniListBullet,
   HiOutlineCog6Tooth,
   HiOutlineDocumentText,
+  HiOutlineUserGroup,
   HiOutlineVideoCamera,
 } from "react-icons/hi2";
 import { History } from "../history/history";
@@ -13,6 +14,7 @@ import { windowsApi } from "../api";
 import { Recorder } from "../recorder/recorder";
 import { ResponsiveTabTrigger } from "../common/responsive-tab-trigger";
 import { Fancybg } from "../common/fancybg";
+import { SpeakersDirectory } from "../speakers/speakers-directory";
 
 export const MainScreen: FC = () => {
   return (
@@ -34,6 +36,12 @@ export const MainScreen: FC = () => {
               icon={<HiOutlineDocumentText />}
             >
               Postprocessing
+            </ResponsiveTabTrigger>
+            <ResponsiveTabTrigger
+              value="speakers"
+              icon={<HiOutlineUserGroup />}
+            >
+              Speakers
             </ResponsiveTabTrigger>
           </Tabs.List>
         }
@@ -59,6 +67,10 @@ export const MainScreen: FC = () => {
 
         <Tabs.Content value="postprocess">
           <Postprocess />
+        </Tabs.Content>
+
+        <Tabs.Content value="speakers">
+          <SpeakersDirectory />
         </Tabs.Content>
       </PageContainer>
     </Tabs.Root>

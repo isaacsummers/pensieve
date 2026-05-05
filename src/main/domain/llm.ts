@@ -9,10 +9,14 @@ import { createRetrievalChain } from "langchain/chains/retrieval";
 import { ChatOllama } from "@langchain/community/chat_models/ollama";
 import log from "electron-log/main";
 import * as settings from "./settings";
-import { RecordingTranscript, Settings } from "../../types";
+import { RecordingMeta, RecordingTranscript, Settings } from "../../types";
 import { isNotNull } from "../../utils";
 import { getProgress, setProgress } from "./postprocess";
 import { pullModel } from "./ollama";
+import {
+  loadProfilesById,
+  resolveSpeakerDisplayName,
+} from "./speaker-profiles";
 
 const promptTemplate = `Be short and concise. 
 
@@ -85,14 +89,19 @@ export const getEmbeddings = async () => {
   }
 };
 
-const prepareContext = async (transcript: RecordingTranscript) => {
+const prepareContext = async (
+  transcript: RecordingTranscript,
+  meta?: RecordingMeta,
+) => {
   const splitter = new RecursiveCharacterTextSplitter();
+  const profilesById = meta ? await loadProfilesById() : {};
   const splitDocs = await splitter.splitDocuments([
     new Document({
       pageContent: transcript.transcription
         .map((t) => {
-          const speakerText =
-            t.speaker === "0"
+          const speakerText = meta
+            ? resolveSpeakerDisplayName(t.speaker, meta, profilesById)
+            : t.speaker === "0"
               ? "They"
               : t.speaker === "1"
                 ? "Me"
@@ -121,9 +130,12 @@ const updateProgress = async (step: keyof Settings["llm"]["features"]) => {
   setProgress("summary", (getProgress("summary") ?? 0) + 1 / total);
 };
 
-const summarizeWithEmbeddings = async (transcript: RecordingTranscript) => {
+const summarizeWithEmbeddings = async (
+  transcript: RecordingTranscript,
+  meta?: RecordingMeta,
+) => {
   const { llm } = await settings.getSettings();
-  const context = await prepareContext(transcript);
+  const context = await prepareContext(transcript, meta);
   const chain = await prepareLangchain();
 
   const vectorstore = await MemoryVectorStore.fromDocuments(
@@ -163,9 +175,12 @@ const summarizeWithEmbeddings = async (transcript: RecordingTranscript) => {
   };
 };
 
-const summarizeWithContext = async (transcript: RecordingTranscript) => {
+const summarizeWithContext = async (
+  transcript: RecordingTranscript,
+  meta?: RecordingMeta,
+) => {
   const { llm } = await settings.getSettings();
-  const context = await prepareContext(transcript);
+  const context = await prepareContext(transcript, meta);
   const chain = await prepareLangchain();
 
   const summary = llm.features.summary
@@ -196,9 +211,12 @@ const summarizeWithContext = async (transcript: RecordingTranscript) => {
   };
 };
 
-export const summarize = async (transcript: RecordingTranscript) => {
+export const summarize = async (
+  transcript: RecordingTranscript,
+  meta?: RecordingMeta,
+) => {
   const { llm } = await settings.getSettings();
   return llm.useEmbedding
-    ? summarizeWithEmbeddings(transcript)
-    : summarizeWithContext(transcript);
+    ? summarizeWithEmbeddings(transcript, meta)
+    : summarizeWithContext(transcript, meta);
 };

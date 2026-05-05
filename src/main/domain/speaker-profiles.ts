@@ -1273,6 +1273,143 @@ export const getSpeakerAvatarPath = async (
 };
 
 /**
+ * Non-destructive manual speaker assignment for a single recording.
+ * Writes a manual match entry to meta.speakerMatches[speakerKey] and
+ * clears any rejected suggestion for that key+profile pair.
+ *
+ * Does NOT update the profile embedding automatically — use
+ * updateProfileEmbeddingFromRecording for that.
+ *
+ * Returns { ok, profile, suggestEmbeddingUpdate } where suggestEmbeddingUpdate
+ * is true when the recording already has a raw embedding for this key, meaning
+ * the caller may optionally offer to refine the profile's voice model.
+ */
+export const assignSpeakerToProfile = async (
+  recordingId: string,
+  speakerKey: string,
+  profileId: string,
+): Promise<{
+  ok: boolean;
+  profile: SpeakerProfile;
+  suggestEmbeddingUpdate: boolean;
+}> => {
+  const s = await read();
+  const profile = s.profiles.find((p) => p.id === profileId);
+  if (!profile) throw new Error(`profile ${profileId} not found`);
+
+  const meta = await history.getRecordingMeta(recordingId);
+
+  const nextMatches: NonNullable<RecordingMeta["speakerMatches"]> = {
+    ...(meta.speakerMatches ?? {}),
+    [speakerKey]: {
+      profileId,
+      profileName: profile.name,
+      confidence: 1.0,
+      matched: true,
+    },
+  };
+
+  // Clear any rejected suggestion for this key+profile pair.
+  const nextRejected: NonNullable<RecordingMeta["rejectedSuggestions"]> = {
+    ...(meta.rejectedSuggestions ?? {}),
+  };
+  if (nextRejected[speakerKey]) {
+    nextRejected[speakerKey] = nextRejected[speakerKey].filter(
+      (id) => id !== profileId,
+    );
+  }
+
+  await history.updateRecording(recordingId, {
+    speakerMatches: nextMatches,
+    rejectedSuggestions: nextRejected,
+  });
+
+  const hasEmbedding = !!(meta.speakerEmbeddings?.[speakerKey]?.length);
+  return { ok: true, profile, suggestEmbeddingUpdate: hasEmbedding };
+};
+
+/**
+ * Update a profile's voice embedding using the raw diarization embedding
+ * stored on a recording for a given speaker key.
+ *
+ * This is a separate, opt-in step from assignment. Returns the updated profile.
+ */
+export const updateProfileEmbeddingFromRecording = async (
+  recordingId: string,
+  speakerKey: string,
+  profileId: string,
+): Promise<SpeakerProfile> => {
+  const meta = await history.getRecordingMeta(recordingId);
+  const embedding = meta.speakerEmbeddings?.[speakerKey];
+  if (!embedding || embedding.length === 0)
+    throw new Error(
+      `No embedding stored for speaker ${speakerKey} on recording ${recordingId}`,
+    );
+
+  const s = await read();
+  const profile = s.profiles.find((p) => p.id === profileId);
+  if (!profile) throw new Error(`profile ${profileId} not found`);
+
+  const updated = updateProfileEmbedding(profile, embedding);
+  profile.embedding = updated.embedding;
+  profile.sampleCount = updated.sampleCount;
+  profile.updatedAt = updated.updatedAt;
+  await write(s);
+
+  return profile;
+};
+
+/**
+ * Update the aliases array for a profile.
+ */
+export const updateSpeakerAliases = async (
+  profileId: string,
+  aliases: string[],
+): Promise<SpeakerProfile> => {
+  const s = await read();
+  const profile = s.profiles.find((p) => p.id === profileId);
+  if (!profile) throw new Error(`profile ${profileId} not found`);
+  profile.aliases = [...new Set(aliases.map((a) => a.trim()).filter(Boolean))];
+  profile.updatedAt = new Date().toISOString();
+  await write(s);
+  return profile;
+};
+
+// ---------------------------------------------------------------------------
+// Speaker name resolution helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve a display name for a speaker key from recording meta + loaded profiles.
+ * Resolution order:
+ *   1. meta.speakerNames[key]       — explicit per-recording override
+ *   2. profile.name via profileId   — live lookup through speakerMatches
+ *   3. Fallback label               — "They" / "Me" for keys 0/1, else "Speaker N"
+ */
+export function resolveSpeakerDisplayName(
+  speakerKey: string,
+  meta: RecordingMeta,
+  profilesById: Record<string, SpeakerProfile>,
+): string {
+  const explicit = meta.speakerNames?.[speakerKey];
+  if (explicit) return explicit;
+  const profileId = meta.speakerMatches?.[speakerKey]?.profileId;
+  if (profileId && profilesById[profileId]) return profilesById[profileId].name;
+  // Fallback: key "0" = "They", key "1" = "Me", else "Speaker N"
+  if (speakerKey === "0") return "They";
+  if (speakerKey === "1") return "Me";
+  return `Speaker ${speakerKey}`;
+}
+
+/**
+ * Load all profiles and return a profilesById map. Utility for main-process callers.
+ */
+export async function loadProfilesById(): Promise<Record<string, SpeakerProfile>> {
+  const profiles = await listProfiles();
+  return Object.fromEntries(profiles.map((p) => [p.id, p]));
+}
+
+/**
  * Delete the avatar file for `profileId` and clear `profile.avatar`.
  */
 export const deleteSpeakerAvatar = async (

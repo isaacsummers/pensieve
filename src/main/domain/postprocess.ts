@@ -380,7 +380,8 @@ const doSummaryStep = async (job: PostProcessingJob) => {
     return;
   setStep("summary");
 
-  const summary = await llm.summarize(transcript);
+  const meta = await history.getRecordingMeta(job.recordingId).catch(() => undefined);
+  const summary = await llm.summarize(transcript, meta);
   await history.updateRecording(job.recordingId, { summary });
 };
 

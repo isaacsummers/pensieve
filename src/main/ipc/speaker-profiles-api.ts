@@ -7,6 +7,10 @@ export const speakerProfilesApi = {
 
   rename: async (id: string, name: string) => profiles.renameProfile(id, name),
 
+  /** Update the aliases list for a profile. */
+  updateAliases: async (id: string, aliases: string[]) =>
+    profiles.updateSpeakerAliases(id, aliases),
+
   remove: async (id: string) => profiles.removeProfile(id),
 
   getStatus: async () => profiles.getLastError(),
@@ -103,6 +107,38 @@ export const speakerProfilesApi = {
     canonicalId: string,
     absorbedIds: string[],
   ) => profiles.mergeSpeakerProfiles(canonicalId, absorbedIds),
+
+  /**
+   * Non-destructive manual assignment: link a speaker key on a single
+   * recording to a profile. Does NOT touch the profile's embedding — that
+   * is a separate opt-in step via updateProfileEmbeddingFromRecording.
+   *
+   * Returns { ok, profile, suggestEmbeddingUpdate }.
+   */
+  assignSpeakerToProfile: async (
+    recordingId: string,
+    speakerKey: string,
+    profileId: string,
+  ) => profiles.assignSpeakerToProfile(recordingId, speakerKey, profileId),
+
+  /**
+   * Refine a profile's voice model using the raw embedding stored on a
+   * recording for a given speaker key. Opt-in and explicit — should only
+   * be called when the user explicitly confirms they want to update the
+   * model (e.g. after a manual assignment).
+   *
+   * Returns the updated profile.
+   */
+  updateProfileEmbeddingFromRecording: async (
+    recordingId: string,
+    speakerKey: string,
+    profileId: string,
+  ) =>
+    profiles.updateProfileEmbeddingFromRecording(
+      recordingId,
+      speakerKey,
+      profileId,
+    ),
 
   /**
    * Set the avatar for a speaker profile from a base64 data URL.
