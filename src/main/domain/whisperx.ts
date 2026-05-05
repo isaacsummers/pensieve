@@ -46,15 +46,24 @@ const getCommand = (
   // entry-point script, then finally to a bare `whisperx` on PATH.
   try {
     const venvPython = getWhisperxVenvPython();
+    log.info(
+      `[whisperx:getCommand] venvPython=${venvPython} exists=${fs.existsSync(venvPython)}`,
+    );
     if (fs.existsSync(venvPython)) {
       return { cmd: venvPython, prefix: ["-m", "whisperx"] };
     }
     const venvBin = getWhisperxVenvBinary();
+    log.info(
+      `[whisperx:getCommand] venvBin=${venvBin} exists=${fs.existsSync(venvBin)}`,
+    );
     if (fs.existsSync(venvBin)) {
       return { cmd: venvBin, prefix: [] };
     }
-  } catch {
-    /* electron app not ready / packaging issue — fall through to PATH */
+  } catch (e) {
+    log.warn(
+      `[whisperx:getCommand] venv resolution failed, falling back to PATH whisperx`,
+      e,
+    );
   }
   return { cmd: "whisperx", prefix: [] };
 };

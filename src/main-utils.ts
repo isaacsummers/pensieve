@@ -1,5 +1,6 @@
 import path from "path";
 import { app } from "electron";
+import log from "electron-log/main";
 
 export const getExtraResourcesFolder = () => {
   return process.env.NODE_ENV === "development"
@@ -19,7 +20,13 @@ export const getUserDataFolder = (): string => app.getPath("userData");
  * Electron run). False inside a packaged app. Wrapped so domain modules
  * don't have to import directly from "electron".
  */
-export const isDevBuild = (): boolean => !app.isPackaged;
+export const isDevBuild = (): boolean => {
+  const result = !app.isPackaged;
+  log.info(
+    `[main-utils:isDevBuild] app.isPackaged=${app.isPackaged} returning=${result}`,
+  );
+  return result;
+};
 
 export const getMillisecondsFromTimeString = (time: string) => {
   if (!time) return 0;
