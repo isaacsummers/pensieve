@@ -17,6 +17,7 @@ import { PageContent } from "../common/page-content";
 import { Timer } from "./timer";
 import { useInsessionControls } from "./use-insession-controls";
 import { useHostRecorderIpc } from "./use-host-recorder-ipc";
+import { LiveTranscriptPanel } from "./live-transcript-panel";
 
 export const RecorderInsession = forwardRef<HTMLDivElement>((_, ref) => {
   useHostRecorderIpc();
@@ -90,6 +91,10 @@ export const RecorderInsession = forwardRef<HTMLDivElement>((_, ref) => {
           <HiOutlineTrash size="24" />
         </RecordingActionButton>
       </Flex>
+
+      {/* Live transcript panel — only visible when live transcription is enabled */}
+      <LiveTranscriptPanel />
+
       <TextArea
         placeholder="Recording notes..."
         style={{ flexGrow: "1" }}

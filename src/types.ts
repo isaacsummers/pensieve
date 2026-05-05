@@ -116,6 +116,18 @@ export type RecordingMeta = {
   rejectedSuggestions?: Record<string, string[]>;
   /** Most recent non-fatal pipeline error surfaced on this recording. */
   pipelineError?: { stage: string; message: string } | null;
+  /**
+   * All transcript versions for this recording (newest-first).
+   * Each entry is a lightweight summary — full items live in separate files.
+   */
+  transcriptVersions?: TranscriptVersionSummary[];
+  /** Which transcript version is currently "active" (shown by default). */
+  activeTranscriptVersionId?: string;
+  /**
+   * Whether this recording was transcribed live during capture.
+   * Used to display a badge in history.
+   */
+  hasLiveTranscript?: boolean;
 };
 
 export type SpeakerProfile = {
@@ -146,6 +158,74 @@ export type RecordingTranscriptItem = {
   speaker: string;
 };
 
+// ---------------------------------------------------------------------------
+// Live Transcription Types
+// ---------------------------------------------------------------------------
+
+/** Distinguishes how a transcript version was produced. */
+export type TranscriptVersionKind = "live" | "batch";
+
+/**
+ * Lightweight index entry stored in RecordingMeta. No items — just enough
+ * to show a version list without loading every full transcript.
+ */
+export type TranscriptVersionSummary = {
+  id: string;
+  kind: TranscriptVersionKind;
+  /** Model used, e.g. "base.en", "small", "large-v3" */
+  model: string;
+  createdAt: string; // ISO
+  status: "partial" | "final" | "done" | "failed";
+  itemCount: number;
+  error?: string;
+};
+
+/**
+ * A single versioned transcript. Stored as an individual JSON file per
+ * version so the recording list never has to load full transcripts.
+ */
+export type TranscriptVersion = {
+  /** Unique id, e.g. `live-<timestamp>` or `batch-<timestamp>` */
+  id: string;
+  kind: TranscriptVersionKind;
+  model: string;
+  createdAt: string; // ISO
+  items: RecordingTranscriptItem[];
+  /** live: "partial" while recording, "final" once sidecar exits. batch: "done" | "failed" */
+  status: "partial" | "final" | "done" | "failed";
+  error?: string;
+  language?: string;
+};
+
+/** A single live fragment emitted by the Python sidecar */
+export type LiveTranscriptFragment = {
+  /** Sequential index within the recording session */
+  seq: number;
+  text: string;
+  start_ms: number;
+  end_ms: number;
+  /** true = committed (VAD detected silence). Phase 1: always true. */
+  is_final: boolean;
+  language?: string;
+  /** null during live phase; filled by batch diarization in Phase 2 */
+  speaker: string | null;
+};
+
+export type LiveTranscriptionStatus =
+  | "idle"
+  | "loading"
+  | "active"
+  | "finalizing"
+  | "done"
+  | "error";
+
+export type LiveTranscriptionSettings = {
+  enabled: boolean;
+  /** Model for live transcription — faster models preferred */
+  liveModel: string;
+  showOverlay: boolean;
+};
+
 export type PostProcessingStep =
   | "modelDownload"
   | "wav"
@@ -153,6 +233,14 @@ export type PostProcessingStep =
   | "whisper"
   | "summary"
   | "datahooks";
+
+/** Options for the whisper step when invoked for re-processing */
+export type WhisperStepOptions = {
+  /** When true, save result as a new TranscriptVersion instead of overwriting transcript.json */
+  saveAsVersion?: boolean;
+  /** Model override for this run */
+  modelOverride?: string;
+};
 
 export type QueueItemStatus =
   | "queued"
@@ -170,6 +258,8 @@ export type PostProcessingJob = {
   error?: string;
   /** Sort key — authoritative ordering for the queue. */
   order: number;
+  /** Optional overrides for the whisper step (e.g., re-processing with a different model). */
+  whisperOptions?: WhisperStepOptions;
 };
 
 export type PersistedAudioDevice = {
@@ -223,6 +313,11 @@ export const defaultSettings = {
       },
     },
   },
+  liveTranscription: {
+    enabled: false,
+    liveModel: "base.en",
+    showOverlay: true,
+  } as LiveTranscriptionSettings,
   ffmpeg: {
     removeRawRecordings: true,
     autoTriggerPostProcess: true,

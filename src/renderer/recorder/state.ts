@@ -4,6 +4,7 @@ import { historyApi, mainApi, recorderIpcApi } from "../api";
 import { blobToBuffer } from "../../utils";
 import { CapturedMicTrack, RecordingConfig, RecordingMeta } from "../../types";
 import { MicTrack, createRecorder } from "./create-recorder";
+import { useLiveTranscriptionState } from "./live-transcription-state";
 
 type RecorderState = {
   recorder?: { screen: MediaRecorder | null; mic: MicTrack[] };
@@ -118,18 +119,44 @@ export const useRecorderState = create<RecorderState>()((_set, get) => {
             additionalAudioDevices: additional,
           },
         });
+
+        // Sync live transcription enabled flag from settings
+        if (settings.liveTranscription) {
+          useLiveTranscriptionState
+            .getState()
+            .setEnabled(settings.liveTranscription.enabled);
+        }
       } catch (err) {
         // eslint-disable-next-line no-console
         console.warn("Failed to hydrate recording settings", err);
       }
     },
     startRecording: async () => {
+      const newMeta = { ...get().meta, started: new Date().toISOString() };
+      const liveState = useLiveTranscriptionState.getState();
+
+      // Build audio chunk callback if live transcription is enabled
+      const onAudioChunk = liveState.isEnabled
+        ? (chunk: Buffer) => liveState.onAudioChunk(chunk)
+        : undefined;
+
+      const recorder = await createRecorder(get().recordingConfig, onAudioChunk);
       set({
-        recorder: await createRecorder(get().recordingConfig),
-        meta: { ...get().meta, started: new Date().toISOString() },
+        recorder,
+        meta: newMeta,
         isRecording: true,
         isPaused: false,
       });
+
+      // Start live transcription (compute recording ID the same way history.ts does)
+      if (liveState.isEnabled) {
+        const started = new Date(newMeta.started);
+        const recordingId = `${started.getFullYear()}-${started.getMonth() + 1}-${started.getDate()}_${started.getHours()}-${started.getMinutes()}-${started.getSeconds()}`;
+        liveState.onRecordingStart(recordingId).catch((e) => {
+          // eslint-disable-next-line no-console
+          console.warn("Failed to start live transcription", e);
+        });
+      }
     },
     reset: async () =>
       set({
@@ -239,6 +266,16 @@ export const useStopRecording = () => {
   const { recorder, meta, reset } = useRecorderState();
   return useCallback(async () => {
     if (!recorder || !meta) return;
+
+    // Trigger live transcription finalization before stopping recorders
+    const liveState = useLiveTranscriptionState.getState();
+    if (liveState.isEnabled && liveState.currentRecordingId) {
+      // Fire-and-forget: stop finishes asynchronously after the sidecar exits
+      liveState.onRecordingStop().catch((e) => {
+        // eslint-disable-next-line no-console
+        console.warn("Live transcription stop error", e);
+      });
+    }
 
     reset();
     const screenBuffer = await unpackMediaRecorder(recorder.screen);

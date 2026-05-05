@@ -21,6 +21,7 @@ import { registerTray } from "./main/domain/tray";
 import * as windows from "./main/domain/windows";
 import { windowsApi } from "./main/ipc/windows-api";
 import { recorderIpcApi } from "./main/ipc/recorder-ipc";
+import { liveTranscriptionApi } from "./main/ipc/live-transcription-api";
 import {
   getAudioServerSecret,
   setAudioServerPort,
@@ -121,6 +122,7 @@ app.whenReady().then(async () => {
   loadIpcInterfaceInMain("speakerProfiles", speakerProfilesApi);
   loadIpcInterfaceInMain("llm", llmApi);
   loadIpcInterfaceInMain("recorderIpc", recorderIpcApi);
+  loadIpcInterfaceInMain("liveTranscription", liveTranscriptionApi);
 
   searchIndex.initializeSearchIndex().then(() => {
     log.info("Search index initialized.");

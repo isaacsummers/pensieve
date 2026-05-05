@@ -40,6 +40,23 @@ contextBridge.exposeInMainWorld("ipcApi", {
       };
     },
   },
+  liveTranscription: {
+    invoke: (payload: any) => ipcRenderer.invoke("liveTranscription", payload),
+    onFragment: (listener: (data: { recordingId: string; fragment: any }) => void) => {
+      const handler = (_: unknown, data: any) => listener(data);
+      ipcRenderer.on("liveTranscriptFragment", handler);
+      return () => {
+        ipcRenderer.off("liveTranscriptFragment", handler);
+      };
+    },
+    onStatus: (listener: (data: { recordingId: string; status: string }) => void) => {
+      const handler = (_: unknown, data: any) => listener(data);
+      ipcRenderer.on("liveTranscriptStatus", handler);
+      return () => {
+        ipcRenderer.off("liveTranscriptStatus", handler);
+      };
+    },
+  },
   onInvalidateUiKeys: (listener: (keys: string[]) => void) => {
     const handler = (_: unknown, keys: string[]) => {
       listener(keys);

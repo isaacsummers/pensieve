@@ -1,5 +1,7 @@
 import { RecordingConfig } from "../../types";
 
+export type AudioChunkCallback = (chunk: Buffer) => void;
+
 const createScreenRecorder = async () => {
   // @ts-ignore
   const displayMedia = await navigator.mediaDevices.getUserMedia({
@@ -75,6 +77,7 @@ const captureStream = async (
 
 const createMicRecorder = async (
   config: RecordingConfig,
+  onAudioChunk?: AudioChunkCallback,
 ): Promise<MicTrack[]> => {
   const additional = config.additionalAudioDevices ?? [];
 
@@ -99,7 +102,20 @@ const createMicRecorder = async (
       continue;
     }
     const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
-    recorder.start();
+    // If this is the primary mic and a live-transcription callback is provided,
+    // start with 250ms timeslicing so we get data chunks during recording.
+    if (target.isPrimary && onAudioChunk) {
+      recorder.start(250); // timeslice: fire dataavailable every 250ms
+      recorder.addEventListener("dataavailable", (e) => {
+        if (e.data && e.data.size > 0) {
+          e.data.arrayBuffer().then((ab) => {
+            onAudioChunk(Buffer.from(ab));
+          });
+        }
+      });
+    } else {
+      recorder.start();
+    }
     tracks.push({
       recorder,
       isPrimary: target.isPrimary,
@@ -134,8 +150,11 @@ const createMicRecorder = async (
   return tracks;
 };
 
-export const createRecorder = async (config: RecordingConfig) => {
+export const createRecorder = async (
+  config: RecordingConfig,
+  onAudioChunk?: AudioChunkCallback,
+) => {
   const screen = await createScreenRecorder();
-  const mic = await createMicRecorder(config);
+  const mic = await createMicRecorder(config, onAudioChunk);
   return { screen, mic };
 };

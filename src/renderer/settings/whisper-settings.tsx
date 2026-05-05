@@ -335,6 +335,36 @@ export const WhisperSettings: FC = () => {
         label="Force word alignment"
         description="Run the wav2vec alignment pass. Disable to save time if you do not need word-level timestamps."
       />
+
+      {/* ---- Live Transcription ---- */}
+      <Heading mt="2rem" size="4">
+        Live Transcription
+      </Heading>
+      <Text as="p">
+        Show words in real-time while recording. Uses{" "}
+        <code>faster-whisper</code> (already installed with WhisperX).
+        For best results, choose a lighter model.
+      </Text>
+      <SettingsSwitchField
+        form={form}
+        field="liveTranscription.enabled"
+        label="Enable live transcription"
+        description="Show a live transcript panel while recording. Disabled by default. Adds ~5s cold start on first use per session."
+      />
+      <SettingsSelectField
+        form={form}
+        label="Live transcription model"
+        description="Lighter models are faster but less accurate. large-v3 is too slow for real-time."
+        field="liveTranscription.liveModel"
+        values={{
+          "tiny.en": "tiny.en (fastest, English only)",
+          "base.en": "base.en (recommended, English only)",
+          "small.en": "small.en (better, English only)",
+          "medium.en": "medium.en (slower, English only)",
+          small: "small (multilingual)",
+          medium: "medium (multilingual, slower)",
+        }}
+      />
     </Tabs.Content>
   );
 };

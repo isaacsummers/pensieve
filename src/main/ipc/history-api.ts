@@ -4,7 +4,7 @@ import * as history from "../domain/history";
 import * as postprocess from "../domain/postprocess";
 import * as searchIndex from "../domain/search";
 import { openAppWindow } from "../domain/windows";
-import { PostProcessingJob } from "../../types";
+import { PostProcessingJob, TranscriptVersion } from "../../types";
 
 export const historyApi = {
   storeUnassociatedScreenshot: history.storeUnassociatedScreenshot,
@@ -17,6 +17,33 @@ export const historyApi = {
   getRecordingAudioFile: history.getRecordingAudioFile,
   openRecordingFolder: history.openRecordingFolder,
   removeRecording: history.removeRecording,
+
+  // Transcript version helpers
+  loadTranscriptVersion: async (recordingId: string, versionId: string) =>
+    history.loadTranscriptVersion(recordingId, versionId),
+  listTranscriptVersions: async (recordingId: string) =>
+    history.listTranscriptVersions(recordingId),
+  setActiveTranscriptVersion: async (recordingId: string, versionId: string) =>
+    history.setActiveTranscriptVersion(recordingId, versionId),
+  getActiveTranscriptVersion: async (recordingId: string) =>
+    history.getActiveTranscriptVersion(recordingId),
+
+  /**
+   * Queue a re-processing job for an existing recording using a specific
+   * Whisper model. Skips wav/mp3 conversion (already done) and saves the
+   * result as a new TranscriptVersion rather than overwriting transcript.json.
+   */
+  reprocessWithModel: async (
+    recordingId: string,
+    model: string,
+  ): Promise<void> => {
+    postprocess.addToQueue({
+      recordingId,
+      steps: ["whisper"],
+      whisperOptions: { saveAsVersion: true, modelOverride: model },
+    });
+    postprocess.startQueue();
+  },
 
   search: async (query: string) => searchIndex.search(query),
 

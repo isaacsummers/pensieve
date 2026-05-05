@@ -12,7 +12,7 @@ import { invalidateUiKeys } from "../ipc/invalidate-ui";
 import { QueryKeys } from "../../query-keys";
 import * as searchIndex from "./search";
 import { getSettings } from "./settings";
-import { PostProcessingJob, PostProcessingStep } from "../../types";
+import { PostProcessingJob, PostProcessingStep, TranscriptVersion } from "../../types";
 
 let isRunning = false;
 let processingQueue: PostProcessingJob[] = [];
@@ -282,14 +282,48 @@ const doWhisperStep = async (job: PostProcessingJob) => {
     return;
   const { wav, mp3, recordingsFolder } = await getFilePaths(job);
 
-  const model = await models.prepareConfiguredModel();
+  const whisperOpts = job.whisperOptions;
+  const saveAsVersion = whisperOpts?.saveAsVersion ?? false;
+  const modelOverride = whisperOpts?.modelOverride;
+
+  // When re-processing with a model override, use that directly; otherwise
+  // prepare the configured model as usual.
+  const model: string = modelOverride ?? (await models.prepareConfiguredModel());
+
+  // For versioned saves, write to a temp path then promote; for normal
+  // runs write straight to transcript.json.
+  const transcriptPath = saveAsVersion
+    ? path.join(recordingsFolder, job.recordingId, `transcript-reprocess-tmp.json`)
+    : path.join(recordingsFolder, job.recordingId, "transcript.json");
 
   try {
     const { segments } = await whisperx.processWavFile(
       wav,
-      path.join(recordingsFolder, job.recordingId, "transcript.json"),
+      transcriptPath,
       model,
     );
+
+    if (saveAsVersion) {
+      // Read back the written transcript and save as a versioned batch entry
+      try {
+        const raw = await fs.readJson(transcriptPath) as import("../../types").RecordingTranscript;
+        const versionId = `batch-${Date.now()}`;
+        const version: TranscriptVersion = {
+          id: versionId,
+          kind: "batch",
+          model: modelOverride ?? model,
+          createdAt: new Date().toISOString(),
+          items: raw.transcription,
+          status: "done",
+          language: raw.result?.language,
+        };
+        await history.saveTranscriptVersion(job.recordingId, version);
+        await history.setActiveTranscriptVersion(job.recordingId, versionId);
+      } finally {
+        // Clean up the temporary transcript file
+        await fs.rm(transcriptPath, { force: true }).catch(() => {});
+      }
+    }
 
     // Run the speaker embedding + profile-matching pipeline. We prefer the
     // 16kHz mono/stereo wav we just transcribed against: soundfile/libsndfile
@@ -297,28 +331,30 @@ const doWhisperStep = async (job: PostProcessingJob) => {
     // Windows where the bundled ffmpeg isn't on PATH for the sidecar's
     // librosa/audioread fallback. The mp3 is only used if the wav is already
     // gone (post-processing re-entry).
-    try {
-      const audioForEmbedding = fs.existsSync(wav) ? wav : mp3;
-      if (fs.existsSync(audioForEmbedding) && segments.length > 0) {
-        const embed = await whisperx.runSpeakerEmbeddingPipeline({
-          recordingId: job.recordingId,
-          audioPath: audioForEmbedding,
-          segments,
-        });
-        // Merge into meta so the UI can see matches/errors without re-running.
+    if (!saveAsVersion) {
+      try {
+        const audioForEmbedding = fs.existsSync(wav) ? wav : mp3;
+        if (fs.existsSync(audioForEmbedding) && segments.length > 0) {
+          const embed = await whisperx.runSpeakerEmbeddingPipeline({
+            recordingId: job.recordingId,
+            audioPath: audioForEmbedding,
+            segments,
+          });
+          // Merge into meta so the UI can see matches/errors without re-running.
+          await history.updateRecording(job.recordingId, {
+            speakerEmbeddings: embed.speakerEmbeddings,
+            speakerMatches: embed.speakerMatches,
+            speakerNames: embed.speakerNames,
+            pipelineError: embed.pipelineError ?? null,
+          });
+        }
+      } catch (e) {
+        // Last-ditch: never let embeddings crash the whisper step.
+        const message = e instanceof Error ? e.message : String(e);
         await history.updateRecording(job.recordingId, {
-          speakerEmbeddings: embed.speakerEmbeddings,
-          speakerMatches: embed.speakerMatches,
-          speakerNames: embed.speakerNames,
-          pipelineError: embed.pipelineError ?? null,
+          pipelineError: { stage: "embed", message },
         });
       }
-    } catch (e) {
-      // Last-ditch: never let embeddings crash the whisper step.
-      const message = e instanceof Error ? e.message : String(e);
-      await history.updateRecording(job.recordingId, {
-        pipelineError: { stage: "embed", message },
-      });
     }
   } finally {
     // Always drop the intermediate wav, even if transcription or the

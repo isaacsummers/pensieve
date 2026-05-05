@@ -15,4 +15,5 @@ export enum QueryKeys {
   HfAuthError = "hfautherror",
   WhisperxCudaHealth = "whisperxcudahealth",
   WhisperxCudaInstallState = "whisperxcudainstallstate",
+  LiveTranscript = "livetranscript",
 }
