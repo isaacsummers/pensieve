@@ -213,6 +213,27 @@ const showFFmpegWarning = async () => {
   }
 };
 
+// Show warning dialog for missing FFmpeg (Windows)
+const showFFmpegWarningWindows = async () => {
+  const result = await dialog.showMessageBox({
+    type: "warning",
+    title: "FFmpeg Not Found",
+    message: "FFmpeg is required but could not be found.",
+    detail:
+      "Pensieve needs FFmpeg to process audio. Please install it using one of these methods:\n\n" +
+      "• WinGet: winget install Gyan.FFmpeg\n" +
+      "• Chocolatey: choco install ffmpeg\n" +
+      "• Manual: place ffmpeg.exe in C:\\ffmpeg\\bin\\\n\n" +
+      "After installing, open Settings → Dependencies to verify detection or set a custom path.",
+    buttons: ["OK", "Open FFmpeg Website"],
+    defaultId: 0,
+  });
+
+  if (result.response === 1) {
+    shell.openExternal("https://ffmpeg.org/download.html");
+  }
+};
+
 // Cached resolution for hot-path callers. The settings UI uses detectFfmpeg()
 // directly to see fresh state after a "Use existing" / "Download" action.
 let cachedPath: string | null = null;
@@ -253,8 +274,12 @@ const ensureFFmpegAvailable = async (): Promise<void> => {
     const status = await detectFfmpeg();
     cachedStatus = status;
     cachedPath = status.ok && status.path ? status.path : "ffmpeg";
-    if (!status.ok && os.platform() === "darwin") {
-      await showFFmpegWarning();
+    if (!status.ok) {
+      if (os.platform() === "darwin") {
+        await showFFmpegWarning();
+      } else if (os.platform() === "win32") {
+        await showFFmpegWarningWindows();
+      }
     }
     ffmpegChecked = true;
   })();

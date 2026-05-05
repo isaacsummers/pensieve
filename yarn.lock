@@ -8363,13 +8363,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"ffmpeg-static-electron@npm:^2.0.3":
-  version: 2.0.3
-  resolution: "ffmpeg-static-electron@npm:2.0.3"
-  checksum: 10/fce45e713bf1f608a2764406a6ba71383cce27d052a4586da370988301334f21f4e80c91d9be82371c4e3afa5f876988ee27f614f575ed1d0dd2f0f1a09533b8
-  languageName: node
-  linkType: hard
-
 "figures@npm:^2.0.0":
   version: 2.0.0
   resolution: "figures@npm:2.0.0"
@@ -12461,7 +12454,6 @@ __metadata:
     eslint: "npm:^8.57.0"
     eslint-plugin-import: "npm:^2.25.0"
     execa: "npm:^8.0.1"
-    ffmpeg-static-electron: "npm:^2.0.3"
     follow-redirects: "npm:^1.15.6"
     fs-extra: "npm:^11.2.0"
     get-port: "npm:^7.1.0"

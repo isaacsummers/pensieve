@@ -12,6 +12,8 @@ import fs from "fs-extra";
 import path from "path";
 import { Resvg } from "@resvg/resvg-js";
 import pngToIco from "png-to-ico";
+// Note: ffmpeg is NOT bundled by the build system. Users must supply it
+// via the Dependencies panel (Windows) or their system package manager.
 
 const createIcon = async (factor: number, base = 32) => {
   const source = await fs.readFile(path.join(__dirname, "./icon.svg"), "utf-8");
@@ -104,31 +106,9 @@ const config: ForgeConfig = {
   ],
 
   hooks: {
-    generateAssets: async (config, platform, arch) => {
-      const ffmpegBase = path.join(
-        __dirname,
-        "node_modules/ffmpeg-static-electron/bin",
-      );
+    generateAssets: async () => {
       const target = path.join(__dirname, "extra");
       await fs.ensureDir(target);
-
-      // Bundle FFmpeg for Windows. WhisperX is no longer bundled — users
-      // install it separately via `uv tool install whisperx` (see README).
-      if (platform === "win32" && arch === "x64") {
-        await fs.copy(
-          path.join(ffmpegBase, "win/x64/ffmpeg.exe"),
-          path.join(target, "ffmpeg.exe"),
-        );
-      }
-
-      if (platform === "win32" && arch === "ia32") {
-        await fs.copy(
-          path.join(ffmpegBase, "win/ia32/ffmpeg.exe"),
-          path.join(target, "ffmpeg.exe"),
-        );
-      }
-
-      // Note: For macOS and Linux, FFmpeg and WhisperX use system installations
 
       await createIcon(1);
       await createIcon(2);
