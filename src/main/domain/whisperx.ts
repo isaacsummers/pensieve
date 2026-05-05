@@ -5,6 +5,7 @@ import { dialog, shell } from "electron";
 import log from "electron-log/main";
 import { buildArgs, getMillisecondsFromTimeString } from "../../main-utils";
 import * as ffmpeg from "./ffmpeg";
+import * as whisperxCuda from "./whisperx-cuda";
 import * as runner from "./runner";
 import * as postprocess from "./postprocess";
 import * as speakerProfiles from "./speaker-profiles";
@@ -189,6 +190,34 @@ export const processWavFile = async (
   const settings = (await getSettings()).whisperx;
   const outDir = path.dirname(output);
   const inputTime = await ffmpeg.getDuration(input);
+
+  // CUDA preflight: when the user picked device=cuda and they actually
+  // have an NVIDIA GPU, verify the WhisperX Python env has a CUDA-capable
+  // torch BEFORE invoking WhisperX. Otherwise WhisperX runs for ~10s and
+  // crashes with `cublas64_12.dll is not found`, surfaced to the UI as a
+  // generic non-zero exit. We block here with a typed error so the
+  // renderer can show a Settings → WhisperX call-to-action.
+  //
+  // We deliberately do NOT block when hasNvidiaGpu=false: the user picked
+  // cuda on a non-NVIDIA machine and that's their problem to surface
+  // however WhisperX naturally surfaces it (CPU fallback, error, etc.).
+  if (settings.device === "cuda") {
+    try {
+      const health = await whisperxCuda.checkCudaHealthCached();
+      if (health.hasNvidiaGpu && !health.torchCudaAvailable) {
+        throw new whisperxCuda.CudaTorchMissingError(health.suggestedIndexUrl);
+      }
+    } catch (e) {
+      if (e instanceof whisperxCuda.CudaTorchMissingError) throw e;
+      // Probe failure shouldn't itself block the run — fall through and
+      // let WhisperX produce its own error if torch is genuinely broken.
+      log.warn(
+        `[whisperx] CUDA preflight probe failed; proceeding without gate: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      );
+    }
+  }
 
   if (settings.diarize && !settings.hfToken.trim()) {
     throw new Error(

@@ -159,7 +159,60 @@ const probeTorch = async (
   }
 };
 
+// --- public: CudaTorchMissingError ------------------------------------------
+
+/**
+ * Thrown by the WhisperX pipeline preflight when the user has selected
+ * `device=cuda` and the host has an NVIDIA GPU, but the WhisperX Python
+ * environment has CPU-only torch installed. WhisperX would otherwise crash
+ * mid-run with `cublas64_12.dll is not found` after ~10s; this error blocks
+ * the run before WhisperX is invoked so the renderer can prompt the user to
+ * install CUDA torch from Settings → WhisperX.
+ */
+export class CudaTorchMissingError extends Error {
+  readonly code = "CUDA_TORCH_MISSING" as const;
+  readonly suggestedIndexUrl: string | null;
+  constructor(suggestedIndexUrl: string | null) {
+    super(
+      "CUDA torch is not installed. WhisperX cannot use your GPU. " +
+        "Go to Settings → WhisperX to install CUDA support.",
+    );
+    this.name = "CudaTorchMissingError";
+    this.suggestedIndexUrl = suggestedIndexUrl;
+  }
+}
+
 // --- public: checkCudaHealth -------------------------------------------------
+
+/**
+ * In-process cache of the most recent successful health probe. The probe
+ * runs nvidia-smi + a `python -c 'import torch'` subprocess (~hundreds of
+ * ms) so we cache it for the lifetime of the main process to avoid
+ * re-probing on every recording. The renderer's reinstall flow calls
+ * `invalidateCudaHealthCache()` after a successful torch reinstall so the
+ * next pipeline run picks up the new state.
+ */
+let cachedHealth: CudaHealthResult | null = null;
+let cachedHealthInFlight: Promise<CudaHealthResult> | null = null;
+
+export const invalidateCudaHealthCache = (): void => {
+  cachedHealth = null;
+};
+
+export const checkCudaHealthCached = async (): Promise<CudaHealthResult> => {
+  if (cachedHealth) return cachedHealth;
+  if (cachedHealthInFlight) return cachedHealthInFlight;
+  cachedHealthInFlight = (async () => {
+    const result = await checkCudaHealth();
+    cachedHealth = result;
+    return result;
+  })();
+  try {
+    return await cachedHealthInFlight;
+  } finally {
+    cachedHealthInFlight = null;
+  }
+};
 
 export const checkCudaHealth = async (): Promise<CudaHealthResult> => {
   const { hasGpu, driverCudaVersion } = await probeNvidiaSmi();
@@ -255,6 +308,9 @@ export const reinstallCudaTorch = async (
         ok: true,
         error: null,
       };
+      // Force the next pipeline run to re-probe so it sees the freshly
+      // installed CUDA torch instead of the stale cached state.
+      invalidateCudaHealthCache();
       return { ok: true };
     }
     const errMsg = `pip exited with code ${r.exitCode}`;
