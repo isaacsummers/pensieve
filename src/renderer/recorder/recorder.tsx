@@ -9,13 +9,10 @@ import {
 
 import { forwardRef, useEffect } from "react";
 import { useRecorderState } from "./state";
-import { MicMultiSelector } from "./mic-multi-selector";
-import { useMicSources } from "./hooks";
+import { AudioCapturePanel } from "./audio-capture-panel";
 import { RecorderInsession } from "./recorder-insession";
 
 export const Recorder = forwardRef<HTMLDivElement>((_, ref) => {
-  const defaultMic = useMicSources()?.[0];
-
   const {
     setConfig,
     recordingConfig,
@@ -58,20 +55,10 @@ export const Recorder = forwardRef<HTMLDivElement>((_, ref) => {
       />
 
       <CheckboxCards.Root
-        value={[
-          recordingConfig.mic ? "mic" : "",
-          recordingConfig.recordScreenAudio ? "screen" : "",
-        ]}
+        value={[recordingConfig.recordScreenAudio ? "screen" : ""]}
         columns={{ initial: "1" }}
         onValueChange={(value) => {
-          if (value.filter((v) => !!v).length === 0) return;
-
-          setConfig({
-            mic: value.includes("mic")
-              ? recordingConfig.mic ?? defaultMic
-              : undefined,
-            recordScreenAudio: value.includes("screen"),
-          });
+          setConfig({ recordScreenAudio: value.includes("screen") });
         }}
       >
         <CheckboxCards.Item value="screen">
@@ -79,22 +66,10 @@ export const Recorder = forwardRef<HTMLDivElement>((_, ref) => {
             <Text weight="bold">Record screen audio</Text>
           </Flex>
         </CheckboxCards.Item>
-        <CheckboxCards.Item value="mic">
-          <Flex direction="column" width="100%">
-            <Text weight="bold">Record microphone</Text>
-          </Flex>
-        </CheckboxCards.Item>
       </CheckboxCards.Root>
 
       <Box mt="1rem">
-        <Flex maxWidth="100%" gap="1rem">
-          <Box flexBasis="100%" overflow="hidden">
-            <Text size="2" weight="bold">
-              Microphone
-            </Text>
-            <MicMultiSelector />
-          </Box>
-        </Flex>
+        <AudioCapturePanel />
       </Box>
 
       <Flex justify="center">
