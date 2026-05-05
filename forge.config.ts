@@ -103,8 +103,19 @@ const downloadUv = async (extraDir: string): Promise<void> => {
     const buf = Buffer.from(await res.arrayBuffer());
     await fs.writeFile(archivePath, buf);
 
-    // bsdtar (shipped on Win10+, macOS, Linux) handles both .zip and .tar.gz.
-    execSync(`tar -xf "${archivePath}" -C "${tmpDir}"`, { stdio: "inherit" });
+    // bsdtar (shipped on Win10+, macOS, Linux) handles .tar.gz natively,
+    // but Git Bash's tar on Windows can't unpack .zip — use PowerShell's
+    // Expand-Archive there instead.
+    if (process.platform === "win32" && archive.endsWith(".zip")) {
+      execSync(
+        `powershell -NoProfile -Command "Expand-Archive -Path '${archivePath}' -DestinationPath '${tmpDir}' -Force"`,
+        { stdio: "inherit" },
+      );
+    } else {
+      execSync(`tar -xf "${archivePath}" -C "${tmpDir}"`, {
+        stdio: "inherit",
+      });
+    }
 
     // Locate the extracted binary (may sit at the archive root or nested
     // under a release-name directory).
@@ -230,6 +241,17 @@ const config: ForgeConfig = {
 
   hooks: {
     generateAssets: async () => {
+      // generateAssets runs during both `electron-forge start` and
+      // `... package` / `... make`. We only want the heavy downloads
+      // (uv) during a real build — dev iterations should be fast.
+      if (process.env.NODE_ENV !== "production") {
+        // eslint-disable-next-line no-console
+        console.log(
+          "[generateAssets] dev mode (NODE_ENV != production) — skipping uv download / icon regen",
+        );
+        return;
+      }
+
       const target = path.join(__dirname, "extra");
       await fs.ensureDir(target);
 
