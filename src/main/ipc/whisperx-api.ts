@@ -1,5 +1,6 @@
 import { execa } from "execa";
 import * as whisperx from "../domain/whisperx";
+import * as whisperxCuda from "../domain/whisperx-cuda";
 
 export const whisperxApi = {
   checkInstalled: async () => whisperx.checkWhisperxAvailability(),
@@ -15,6 +16,27 @@ export const whisperxApi = {
   clearHfAuthError: async () => {
     whisperx.clearLastHfAuthError();
   },
+
+  /**
+   * Probe the host for an NVIDIA GPU and verify that the WhisperX Python
+   * environment has a CUDA-capable torch installed. Used by the settings
+   * UI to surface an actionable warning + remediation button when the
+   * user has a GPU but only CPU torch (the default for `uv tool install
+   * whisperx`), which crashes WhisperX with `cublas64_12.dll not found`
+   * on first run.
+   */
+  checkCudaHealth: async () => whisperxCuda.checkCudaHealth(),
+
+  /**
+   * Reinstall torch + torchvision + torchaudio against the supplied
+   * PyTorch wheel index (e.g. `https://download.pytorch.org/whl/cu124`)
+   * into the WhisperX Python environment. Streams progress into a
+   * module-level state queryable via `getCudaInstallState`.
+   */
+  reinstallCudaTorch: async (indexUrl: string) =>
+    whisperxCuda.reinstallCudaTorch(indexUrl),
+
+  getCudaInstallState: async () => whisperxCuda.getCudaInstallState(),
 
   testTranscriptionPipeline: async (): Promise<{
     ok: boolean;

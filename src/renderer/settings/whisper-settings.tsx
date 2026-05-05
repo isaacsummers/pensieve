@@ -15,6 +15,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { GoLinkExternal } from "react-icons/go";
 import {
   HiOutlineCheckCircle,
+  HiOutlineExclamationTriangle,
   HiOutlineTrash,
   HiOutlineXCircle,
   HiPlay,
@@ -201,6 +202,10 @@ export const WhisperSettings: FC = () => {
         description="`cuda` for NVIDIA GPUs, `cpu` for CPU-only, `mps` for Apple Silicon (experimental)."
         values={["cuda", "cpu", "mps"]}
       />
+      {form.watch("whisperx.device") === "cuda" && (
+        /* eslint-disable-next-line @typescript-eslint/no-use-before-define */
+        <CudaHealthPanel />
+      )}
       <SettingsSelectField
         form={form}
         field="whisperx.computeType"
@@ -807,5 +812,195 @@ const SpeakerProfilesPanel: FC = () => {
         </Flex>
       )}
     </>
+  );
+};
+
+const CudaHealthPanel: FC = () => {
+  const qc = useQueryClient();
+  const { data: health, isFetching: checking } = useQuery({
+    queryKey: [QueryKeys.WhisperxCudaHealth],
+    queryFn: whisperxApi.checkCudaHealth,
+  });
+
+  const { data: installState } = useQuery({
+    queryKey: [QueryKeys.WhisperxCudaInstallState],
+    queryFn: whisperxApi.getCudaInstallState,
+    refetchInterval: (q) =>
+      q.state.data?.inProgress ? 2000 : false,
+  });
+
+  const reinstall = useMutation({
+    mutationFn: (indexUrl: string) => whisperxApi.reinstallCudaTorch(indexUrl),
+    onSuccess: () => {
+      qc.invalidateQueries({
+        queryKey: [QueryKeys.WhisperxCudaInstallState],
+      });
+      qc.invalidateQueries({ queryKey: [QueryKeys.WhisperxCudaHealth] });
+    },
+  });
+
+  // Refresh health when an install finishes.
+  useEffect(() => {
+    if (installState && !installState.inProgress && installState.finishedAt) {
+      qc.invalidateQueries({ queryKey: [QueryKeys.WhisperxCudaHealth] });
+    }
+  }, [installState?.inProgress, installState?.finishedAt, qc]);
+
+  const recheck = () => {
+    qc.invalidateQueries({ queryKey: [QueryKeys.WhisperxCudaHealth] });
+  };
+
+  const panelStyle = {
+    border: "1px solid var(--gray-a5)",
+    borderRadius: 6,
+  } as const;
+
+  if (!health) {
+    return (
+      <Flex
+        align="center"
+        gap="0.5rem"
+        mt="0.5rem"
+        p="0.5rem"
+        style={panelStyle}
+      >
+        <Spinner size="1" />
+        <Text size="2" color="gray">
+          Checking CUDA availability…
+        </Text>
+      </Flex>
+    );
+  }
+
+  if (!health.hasNvidiaGpu) {
+    return (
+      <Callout.Root color="blue" variant="surface" mt="0.5rem">
+        <Callout.Icon>
+          <HiOutlineXCircle />
+        </Callout.Icon>
+        <Callout.Text>
+          No NVIDIA GPU detected — transcription will use CPU.
+        </Callout.Text>
+      </Callout.Root>
+    );
+  }
+
+  if (!health.torchCudaAvailable) {
+    const installing = installState?.inProgress === true;
+    const finishedOk =
+      installState && !installState.inProgress && installState.ok === true;
+    const finishedErr =
+      installState && !installState.inProgress && installState.ok === false;
+
+    return (
+      <Flex
+        direction="column"
+        gap="0.5rem"
+        mt="0.5rem"
+        p="0.5rem"
+        style={panelStyle}
+      >
+        <Callout.Root color="amber" variant="surface">
+          <Callout.Icon>
+            <HiOutlineExclamationTriangle />
+          </Callout.Icon>
+          <Callout.Text>
+            GPU detected but PyTorch has no CUDA support. WhisperX will crash
+            on first run.
+          </Callout.Text>
+        </Callout.Root>
+        <Flex align="center" gap="0.5rem" wrap="wrap">
+          <Text size="1" color="gray">
+            Installed: torch {health.torchVersion ?? "unknown"}
+          </Text>
+          {health.cudaDriverVersion && (
+            <Text size="1" color="gray">
+              · Driver CUDA {health.cudaDriverVersion}
+            </Text>
+          )}
+        </Flex>
+        <Flex align="center" gap="0.5rem" wrap="wrap">
+          <Button
+            type="button"
+            size="1"
+            variant="soft"
+            color="amber"
+            disabled={installing || !health.suggestedIndexUrl}
+            onClick={() => {
+              if (!health.suggestedIndexUrl) return;
+              reinstall.mutate(health.suggestedIndexUrl);
+            }}
+          >
+            {installing ? (
+              <>
+                <Spinner size="1" /> Installing…
+              </>
+            ) : (
+              "Fix: Install CUDA torch"
+            )}
+          </Button>
+          <Button
+            type="button"
+            size="1"
+            variant="ghost"
+            onClick={recheck}
+            disabled={checking || installing}
+          >
+            Re-check
+          </Button>
+          {health.suggestedIndexUrl && (
+            <Text size="1" color="gray">
+              <code>{health.suggestedIndexUrl}</code>
+            </Text>
+          )}
+        </Flex>
+        {finishedOk && (
+          <Text size="1" color="green">
+            CUDA torch installed. Re-check to confirm.
+          </Text>
+        )}
+        {finishedErr && installState?.error && (
+          <Text size="1" color="red">
+            Install failed: {installState.error}
+          </Text>
+        )}
+        {installState && (installing || installState.log) && (
+          <pre
+            style={{
+              margin: 0,
+              padding: "0.5rem",
+              maxHeight: 180,
+              overflow: "auto",
+              background: "var(--gray-a3)",
+              borderRadius: 4,
+              fontSize: 11,
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+            }}
+          >
+            {installState.log || "Starting…"}
+          </pre>
+        )}
+      </Flex>
+    );
+  }
+
+  return (
+    <Flex align="center" gap="0.5rem" mt="0.5rem" p="0.5rem" style={panelStyle}>
+      <Text size="2" color="green">
+        <HiOutlineCheckCircle style={{ display: "inline", marginRight: 4 }} />
+        CUDA ready (torch {health.torchVersion ?? "?"})
+      </Text>
+      <Button
+        type="button"
+        size="1"
+        variant="ghost"
+        ml="auto"
+        onClick={recheck}
+        disabled={checking}
+      >
+        Re-check
+      </Button>
+    </Flex>
   );
 };

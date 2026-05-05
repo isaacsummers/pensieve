@@ -13,4 +13,6 @@ export enum QueryKeys {
   SpeakerProfiles = "speakerprofiles",
   SpeakerPipelineStatus = "speakerpipelinestatus",
   HfAuthError = "hfautherror",
+  WhisperxCudaHealth = "whisperxcudahealth",
+  WhisperxCudaInstallState = "whisperxcudainstallstate",
 }
