@@ -200,4 +200,37 @@ export const speakerProfilesApi = {
     await history.updateRecording(recordingId, { speakerItemOverrides: nextOverrides });
     return nextOverrides;
   },
+
+  /**
+   * Clear all per-item speaker overrides that belong to a given speaker key.
+   * An override "belongs" to speakerKey when:
+   *   - the override's profileId matches the recording-level match for speakerKey, OR
+   *   - the transcript item at that index has speaker === speakerKey
+   * Returns updated meta.
+   */
+  clearAllItemOverridesForSpeakerKey: async (
+    recordingId: string,
+    speakerKey: string,
+  ) => {
+    const meta = await history.getRecordingMeta(recordingId);
+    const transcript = await history.getRecordingTranscript(recordingId);
+    const items = transcript?.transcription ?? [];
+    const matchedProfileId = meta.speakerMatches?.[speakerKey]?.profileId ?? null;
+    const currentOverrides = meta.speakerItemOverrides ?? {};
+
+    const nextOverrides: NonNullable<typeof meta.speakerItemOverrides> = {};
+    for (const [idxStr, profileId] of Object.entries(currentOverrides)) {
+      const idx = Number(idxStr);
+      const itemSpeakerKey = items[idx]?.speaker ?? null;
+      const isForThisKey =
+        (matchedProfileId !== null && profileId === matchedProfileId) ||
+        itemSpeakerKey === speakerKey;
+      if (!isForThisKey) {
+        nextOverrides[idxStr] = profileId;
+      }
+    }
+
+    await history.updateRecording(recordingId, { speakerItemOverrides: nextOverrides });
+    return meta;
+  },
 };

@@ -1,7 +1,7 @@
 import { FC, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Box, Flex, Tabs } from "@radix-ui/themes";
-import { HiMiniPencilSquare, HiOutlineBars3BottomLeft } from "react-icons/hi2";
+import { HiMiniPencilSquare, HiOutlineBars3BottomLeft, HiOutlineUserGroup } from "react-icons/hi2";
 import { RiRobot2Line } from "react-icons/ri";
 import { historyDetailsRoute } from "../router/router";
 import { QueryKeys } from "../../query-keys";
@@ -17,6 +17,7 @@ import { SearchBar } from "./search-bar";
 import { ResponsiveTabTrigger } from "../common/responsive-tab-trigger";
 import { TranscriptVersionBar } from "./transcript-version-bar";
 import { RecordingTranscript } from "../../types";
+import { SpeakersTab } from "./speakers-tab";
 
 export const DetailsScreen: FC = () => {
   const qc = useQueryClient();
@@ -49,6 +50,12 @@ export const DetailsScreen: FC = () => {
     : transcript;
 
   const audio = useManagedAudio(effectiveTranscript ?? undefined);
+
+  const hasSpeakers =
+    Object.keys(recording?.speakerMatches ?? {}).length > 0 ||
+    (effectiveTranscript?.transcription ?? []).some(
+      (item) => item.speaker != null && item.speaker !== "",
+    );
 
   const { data: versions } = useQuery({
     queryKey: [QueryKeys.Transcript, id, "versions"],
@@ -92,6 +99,11 @@ export const DetailsScreen: FC = () => {
             <ResponsiveTabTrigger value="notes" icon={<HiMiniPencilSquare />}>
               Notes
             </ResponsiveTabTrigger>
+            {hasSpeakers && (
+              <ResponsiveTabTrigger value="speakers" icon={<HiOutlineUserGroup />}>
+                Speakers
+              </ResponsiveTabTrigger>
+            )}
           </Tabs.List>
         }
       >
@@ -140,6 +152,19 @@ export const DetailsScreen: FC = () => {
                 }}
               />
             </Tabs.Content>
+            {hasSpeakers && (
+              <Tabs.Content value="speakers">
+                <SpeakersTab
+                  recordingId={id}
+                  meta={recording}
+                  transcript={effectiveTranscript}
+                  onMetaUpdated={() => {
+                    qc.invalidateQueries({ queryKey: [QueryKeys.History, id] });
+                    qc.invalidateQueries({ queryKey: [QueryKeys.Transcript, id, "active"] });
+                  }}
+                />
+              </Tabs.Content>
+            )}
           </Box>
           <Box>
             <AudioControls audio={audio} id={id} />
