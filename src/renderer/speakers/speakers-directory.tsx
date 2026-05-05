@@ -160,27 +160,7 @@ export const SpeakersDirectory: FC = () => {
 
   const addSpeakerMutation = useMutation({
     mutationFn: async (name: string) => {
-      // Create a new empty profile using the rename trick:
-      // saveFromRecording won't work without a real recording. Instead we use
-      // an existing IPC that creates a blank profile — checking what's available.
-      // upsertSpeakerProfile doesn't exist; closest is that Phase 1 adds
-      // profiles via saveFromRecording. We call saveFromRecording with a
-      // non-existent recording ID which will fail on the embedding side but
-      // may still create the profile. Instead, use createSpeakerProfile if available.
-      //
-      // Since the IPC doesn't expose a raw "create" endpoint, we reuse the
-      // rename path: create a placeholder via saveFromRecording on an empty
-      // name (no-op if no recording) and then rename. As a simpler approach,
-      // we call `rename` on a placeholder — but there's no create-with-name.
-      //
-      // Best available: the settings panel uses saveFromRecording for new profiles.
-      // For a standalone directory, we call saveFromRecording with a dummy
-      // recordingId and speakerKey — the backend will fail on the embedding
-      // lookup but still create a named profile.
-      //
-      // Actually: looking at the API, saveFromRecording IS the create path.
-      // It creates a profile with the given name even if no embedding is found.
-      return speakerProfilesApi.saveFromRecording("", "0", name);
+      return speakerProfilesApi.createSpeakerProfile(name);
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: [QueryKeys.SpeakerProfiles] });

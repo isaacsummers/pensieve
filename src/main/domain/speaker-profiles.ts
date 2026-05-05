@@ -134,6 +134,22 @@ export const upsertProfile = async (
   return created;
 };
 
+export const createSpeakerProfile = async (name: string): Promise<SpeakerProfile> => {
+  const s = await read();
+  const now = new Date().toISOString();
+  const profile: SpeakerProfile = {
+    id: randomUUID(),
+    name,
+    embedding: [],
+    sampleCount: 0,
+    createdAt: now,
+    updatedAt: now,
+  };
+  s.profiles.push(profile);
+  await write(s);
+  return profile;
+};
+
 export const renameProfile = async (id: string, name: string) => {
   const s = await read();
   const p = s.profiles.find((x) => x.id === id);

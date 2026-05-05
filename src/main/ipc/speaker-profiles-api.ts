@@ -5,6 +5,9 @@ import { RecordingMeta } from "../../types";
 export const speakerProfilesApi = {
   list: async () => profiles.listProfiles(),
 
+  /** Create a new empty speaker profile with the given name. */
+  createSpeakerProfile: async (name: string) => profiles.createSpeakerProfile(name),
+
   rename: async (id: string, name: string) => profiles.renameProfile(id, name),
 
   /** Update the aliases list for a profile. */
