@@ -92,4 +92,37 @@ export const speakerProfilesApi = {
     speakerKey: string,
     profileId: string,
   ) => profiles.rejectSpeakerSuggestion(recordingId, speakerKey, profileId),
+
+  /**
+   * Merge multiple profiles into one canonical profile. The canonical
+   * profile's embedding is recomputed as the weighted mean of all
+   * participants; absorbed profiles are deleted; all recording metas are
+   * updated to point to the canonical id.
+   */
+  mergeSpeakerProfiles: async (
+    canonicalId: string,
+    absorbedIds: string[],
+  ) => profiles.mergeSpeakerProfiles(canonicalId, absorbedIds),
+
+  /**
+   * Set the avatar for a speaker profile from a base64 data URL.
+   * Returns the updated profile.
+   */
+  setSpeakerAvatar: async (
+    profileId: string,
+    imageDataUrl: string,
+  ) => profiles.setSpeakerAvatar(profileId, imageDataUrl),
+
+  /**
+   * Return the full filesystem path to the avatar file for `profileId`,
+   * or null if none is set / file is missing.
+   */
+  getSpeakerAvatarPath: async (profileId: string) =>
+    profiles.getSpeakerAvatarPath(profileId),
+
+  /**
+   * Delete the avatar file for `profileId` and clear `profile.avatar`.
+   */
+  deleteSpeakerAvatar: async (profileId: string) =>
+    profiles.deleteSpeakerAvatar(profileId),
 };

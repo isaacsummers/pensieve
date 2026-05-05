@@ -1100,3 +1100,195 @@ export const rejectSpeakerSuggestion = async (
   });
   return nextMatches;
 };
+
+// ---------------------------------------------------------------------------
+// Profile merge
+// ---------------------------------------------------------------------------
+
+/**
+ * Merge two or more speaker profiles into one canonical profile.
+ *
+ * - The canonical profile's embedding is recomputed as the weighted mean
+ *   (by `sampleCount`) of all participating profiles, then L2-normalised.
+ * - `aliases` arrays are unioned and de-duplicated.
+ * - `sampleCount` is summed across all profiles.
+ * - Every recording that referenced an absorbed profile via
+ *   `speakerMatches[*].profileId` is updated to point to the canonical id.
+ * - Absorbed profiles are deleted from the store.
+ *
+ * Returns the updated canonical profile.
+ */
+export const mergeSpeakerProfiles = async (
+  canonicalId: string,
+  absorbedIds: string[],
+): Promise<SpeakerProfile> => {
+  if (absorbedIds.length === 0) throw new Error("absorbedIds must not be empty");
+
+  const s = await read();
+
+  const canonical = s.profiles.find((p) => p.id === canonicalId);
+  if (!canonical) throw new Error(`canonical profile ${canonicalId} not found`);
+
+  const absorbed = absorbedIds.map((id) => {
+    const p = s.profiles.find((x) => x.id === id);
+    if (!p) throw new Error(`absorbed profile ${id} not found`);
+    return p;
+  });
+
+  // Weighted-mean embedding accumulation.
+  const allProfiles = [canonical, ...absorbed];
+  let totalCount = 0;
+  const dim = canonical.embedding.length;
+  const accum = new Array<number>(dim).fill(0);
+
+  for (const p of allProfiles) {
+    const w = p.sampleCount ?? 1;
+    totalCount += w;
+    for (let i = 0; i < dim; i++) {
+      accum[i] += (p.embedding[i] ?? 0) * w;
+    }
+  }
+
+  // Divide by total weight then L2-normalise.
+  const raw = accum.map((v) => v / totalCount);
+  const norm = Math.sqrt(raw.reduce((s, v) => s + v * v, 0));
+  const mergedEmbedding = norm > 0 ? raw.map((v) => v / norm) : raw;
+
+  // Union aliases.
+  const allAliases = new Set<string>(canonical.aliases ?? []);
+  for (const p of absorbed) {
+    for (const a of p.aliases ?? []) allAliases.add(a);
+    // Also add the absorbed profile's name as an alias for discoverability.
+    allAliases.add(p.name);
+  }
+
+  // Apply to canonical.
+  canonical.embedding = mergedEmbedding;
+  canonical.sampleCount = totalCount;
+  canonical.aliases = [...allAliases];
+  canonical.updatedAt = new Date().toISOString();
+
+  // Remove absorbed profiles.
+  const absorbedSet = new Set(absorbedIds);
+  s.profiles = s.profiles.filter((p) => !absorbedSet.has(p.id));
+
+  await write(s);
+
+  // Rewrite recording metas: any speakerMatches entry pointing to an absorbed
+  // profile gets redirected to the canonical id.
+  const allRecordings = await history.listRecordings();
+
+  const patchJobs: Promise<void>[] = [];
+  for (const [recordingId, meta] of Object.entries(allRecordings)) {
+    if (!meta.speakerMatches) continue;
+
+    let changed = false;
+    const nextMatches: NonNullable<RecordingMeta["speakerMatches"]> = {};
+    for (const [key, match] of Object.entries(meta.speakerMatches)) {
+      if (match.profileId && absorbedSet.has(match.profileId)) {
+        nextMatches[key] = {
+          ...match,
+          profileId: canonicalId,
+          profileName: canonical.name,
+        };
+        changed = true;
+      } else {
+        nextMatches[key] = match;
+      }
+    }
+
+    if (changed) {
+      patchJobs.push(history.updateRecording(recordingId, { speakerMatches: nextMatches }));
+    }
+  }
+
+  await Promise.all(patchJobs);
+
+  log.info(
+    `[speaker-profiles] merged ${absorbedIds.join(", ")} → ${canonicalId} (${patchJobs.length} recordings updated)`,
+  );
+
+  return canonical;
+};
+
+// ---------------------------------------------------------------------------
+// Avatar management
+// ---------------------------------------------------------------------------
+
+const avatarsDir = (): string =>
+  path.join(app.getPath("userData"), "speaker-avatars");
+
+/**
+ * Store an avatar image for a speaker profile from a data URL.
+ * Writes the image file to `<userData>/speaker-avatars/<profileId>.<ext>`,
+ * updates `profile.avatar` to the basename, and persists the store.
+ *
+ * Returns the updated profile.
+ */
+export const setSpeakerAvatar = async (
+  profileId: string,
+  imageDataUrl: string,
+): Promise<SpeakerProfile> => {
+  // Parse data URL: `data:<mime>;base64,<data>`
+  const match = /^data:image\/(\w+);base64,(.+)$/.exec(imageDataUrl);
+  if (!match) throw new Error("imageDataUrl must be a base64 image data URL");
+  const [, ext, b64] = match;
+  const buffer = Buffer.from(b64, "base64");
+
+  const s = await read();
+  const profile = s.profiles.find((p) => p.id === profileId);
+  if (!profile) throw new Error(`profile ${profileId} not found`);
+
+  await fs.ensureDir(avatarsDir());
+
+  // Remove old avatar file if different extension.
+  if (profile.avatar) {
+    const oldPath = path.join(avatarsDir(), profile.avatar);
+    await fs.remove(oldPath).catch(() => {});
+  }
+
+  const basename = `${profileId}.${ext}`;
+  const destPath = path.join(avatarsDir(), basename);
+  await fs.writeFile(destPath, buffer);
+
+  profile.avatar = basename;
+  profile.updatedAt = new Date().toISOString();
+  await write(s);
+
+  return profile;
+};
+
+/**
+ * Return the full filesystem path to the avatar file for `profileId`, or
+ * `null` if no avatar is set or the file does not exist on disk.
+ */
+export const getSpeakerAvatarPath = async (
+  profileId: string,
+): Promise<string | null> => {
+  const s = await read();
+  const profile = s.profiles.find((p) => p.id === profileId);
+  if (!profile?.avatar) return null;
+  const fullPath = path.join(avatarsDir(), profile.avatar);
+  return fs.existsSync(fullPath) ? fullPath : null;
+};
+
+/**
+ * Delete the avatar file for `profileId` and clear `profile.avatar`.
+ */
+export const deleteSpeakerAvatar = async (
+  profileId: string,
+): Promise<SpeakerProfile> => {
+  const s = await read();
+  const profile = s.profiles.find((p) => p.id === profileId);
+  if (!profile) throw new Error(`profile ${profileId} not found`);
+
+  if (profile.avatar) {
+    const fullPath = path.join(avatarsDir(), profile.avatar);
+    await fs.remove(fullPath).catch(() => {});
+    profile.avatar = undefined;
+    profile.updatedAt = new Date().toISOString();
+    await write(s);
+  }
+
+  return profile;
+};

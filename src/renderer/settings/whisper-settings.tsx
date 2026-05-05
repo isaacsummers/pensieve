@@ -1,4 +1,4 @@
-import { FC, useEffect, useState } from "react";
+import { FC, useEffect, useRef, useState } from "react";
 import * as Tabs from "@radix-ui/react-tabs";
 import {
   Badge,
@@ -19,6 +19,8 @@ import {
   HiOutlineTrash,
   HiOutlineXCircle,
   HiPlay,
+  HiMiniXMark,
+  HiOutlineArrowsRightLeft,
 } from "react-icons/hi2";
 import { modelData } from "../../model-data";
 import { Settings } from "../../types";
@@ -304,7 +306,7 @@ export const WhisperSettings: FC = () => {
           valueAsNumber: true,
         })}
         label="Auto-confirm threshold"
-        description="Cosine similarity at which a speaker is auto-labeled without prompting (0 – 1). Default: 0.80."
+        description="Cosine similarity at which a speaker is auto-labeled without prompting (0 - 1). Default: 0.80."
         type="number"
       />
       <SettingsTextField
@@ -312,7 +314,7 @@ export const WhisperSettings: FC = () => {
           valueAsNumber: true,
         })}
         label="Suggest threshold"
-        description="Cosine similarity at which a suggestion pill is shown for manual confirmation (0 – 1). Default: 0.65. Must be below the auto-confirm threshold."
+        description="Cosine similarity at which a suggestion pill is shown for manual confirmation (0 - 1). Default: 0.65. Must be below the auto-confirm threshold."
         type="number"
       />
       {/* eslint-disable-next-line @typescript-eslint/no-use-before-define */}
@@ -356,7 +358,7 @@ const HfAuthErrorPanel: FC = () => {
     hfError.reason === "forbidden"
       ? "Hugging Face 403 Forbidden"
       : hfError.reason === "gated"
-        ? "Pyannote gated model — terms not accepted"
+        ? "Pyannote gated model - terms not accepted"
         : "Hugging Face 401 Unauthorized";
 
   return (
@@ -444,7 +446,7 @@ const TestTranscriptionPanel: FC = () => {
         disabled={testMutation.isPending}
       >
         <HiPlay />
-        {testMutation.isPending ? "Testing…" : "Test transcription pipeline"}
+        {testMutation.isPending ? "Testing..." : "Test transcription pipeline"}
       </Button>
       {result && (
         <Text size="2" color={result.ok ? "green" : "red"}>
@@ -474,6 +476,17 @@ const SpeakerProfilesPanel: FC = () => {
     "hidden" | "show" | "installing" | "done"
   >("hidden");
 
+  // Profile merge state
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [mergePending, setMergePending] = useState(false);
+  const [mergeCanonicalId, setMergeCanonicalId] = useState<string | null>(null);
+
+  // Avatar state: profileId → file:// URL (or null while loading)
+  const [avatarUrls, setAvatarUrls] = useState<Record<string, string | null>>({});
+  // Hidden file input for avatar upload
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploadTargetId, setUploadTargetId] = useState<string | null>(null);
+
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: [QueryKeys.SpeakerProfiles] });
     qc.invalidateQueries({ queryKey: [QueryKeys.SpeakerPipelineStatus] });
@@ -492,6 +505,75 @@ const SpeakerProfilesPanel: FC = () => {
       speakerProfilesApi.rename(id, name),
     onSettled: invalidate,
   });
+  const mergeMutation = useMutation({
+    mutationFn: ({
+      canonicalId,
+      absorbedIds,
+    }: {
+      canonicalId: string;
+      absorbedIds: string[];
+    }) => speakerProfilesApi.mergeSpeakerProfiles(canonicalId, absorbedIds),
+    onSettled: () => {
+      invalidate();
+      setSelectedIds(new Set());
+      setMergePending(false);
+      setMergeCanonicalId(null);
+    },
+  });
+  const setAvatarMutation = useMutation({
+    mutationFn: ({
+      profileId,
+      imageDataUrl,
+    }: {
+      profileId: string;
+      imageDataUrl: string;
+    }) => speakerProfilesApi.setSpeakerAvatar(profileId, imageDataUrl),
+    onSettled: (updatedProfile) => {
+      invalidate();
+      // Refresh avatar URL for this profile.
+      if (updatedProfile?.id) {
+        void speakerProfilesApi
+          .getSpeakerAvatarPath(updatedProfile.id)
+          .then((p) => {
+            setAvatarUrls((prev) => ({
+              ...prev,
+              [updatedProfile.id]: p ? `file://${p}` : null,
+            }));
+          });
+      }
+    },
+  });
+  const deleteAvatarMutation = useMutation({
+    mutationFn: (profileId: string) =>
+      speakerProfilesApi.deleteSpeakerAvatar(profileId),
+    onSettled: (_updatedProfile, _err, profileId) => {
+      invalidate();
+      setAvatarUrls((prev) => ({ ...prev, [profileId]: null }));
+    },
+  });
+
+  // Load avatar paths when profiles change.
+  useEffect(() => {
+    if (!profiles) return;
+    for (const profile of profiles) {
+      if (profile.avatar) {
+        void speakerProfilesApi
+          .getSpeakerAvatarPath(profile.id)
+          .then((p) => {
+            setAvatarUrls((prev) => ({
+              ...prev,
+              [profile.id]: p ? `file://${p}` : null,
+            }));
+          });
+      } else {
+        setAvatarUrls((prev) =>
+          prev[profile.id] !== null ? { ...prev, [profile.id]: null } : prev,
+        );
+      }
+    }
+  // Run when profile list changes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profiles?.map((p) => `${p.id}:${p.avatar ?? ""}`).join(",")]);
 
   // Background dry-run on mount: show banner if deps are missing.
   useEffect(() => {
@@ -558,8 +640,59 @@ const SpeakerProfilesPanel: FC = () => {
       !lastDryRun.ok &&
       isMissingModuleMessage(lastDryRun.message));
 
+  // Toggle profile selection for merge.
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  // Derive canonical default: profile with highest sampleCount among selected.
+  const selectedProfiles =
+    profiles?.filter((p) => selectedIds.has(p.id)) ?? [];
+  const defaultCanonical =
+    selectedProfiles.length > 0
+      ? selectedProfiles.reduce((a, b) =>
+          (a.sampleCount ?? 1) >= (b.sampleCount ?? 1) ? a : b,
+        ).id
+      : null;
+
+  const handleMergeConfirm = () => {
+    const canonical = mergeCanonicalId ?? defaultCanonical;
+    if (!canonical) return;
+    const absorbed = [...selectedIds].filter((id) => id !== canonical);
+    mergeMutation.mutate({ canonicalId: canonical, absorbedIds: absorbed });
+  };
+
+  // Avatar file upload handler.
+  const handleAvatarFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    const targetId = uploadTargetId;
+    // Reset so the same file can be selected again.
+    e.target.value = "";
+    if (!file || !targetId) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      setAvatarMutation.mutate({ profileId: targetId, imageDataUrl: dataUrl });
+    };
+    reader.readAsDataURL(file);
+  };
+
   return (
     <>
+      {/* Hidden file input for avatar uploads */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        style={{ display: "none" }}
+        onChange={handleAvatarFileChange}
+      />
+
       {venv && (
         <Flex
           direction="column"
@@ -765,6 +898,83 @@ const SpeakerProfilesPanel: FC = () => {
           bookmark icon to save them as a profile.
         </Text>
       )}
+      {/* Merge bar: shown when 2+ profiles are selected */}
+      {selectedIds.size >= 2 && (
+        <Flex
+          direction="column"
+          gap="0.5rem"
+          mt="0.5rem"
+          p="0.5rem"
+          style={{
+            border: "1px solid var(--blue-a7)",
+            borderRadius: 6,
+            background: "var(--blue-a2)",
+          }}
+        >
+          <Flex align="center" gap="0.5rem">
+            <HiOutlineArrowsRightLeft />
+            <Text size="2" weight="bold">
+              Merge {selectedIds.size} profiles
+            </Text>
+            <Button
+              type="button"
+              size="1"
+              variant="soft"
+              color="blue"
+              ml="auto"
+              onClick={() => setMergePending((v) => !v)}
+            >
+              {mergePending ? "Cancel" : "Merge selected…"}
+            </Button>
+          </Flex>
+          {mergePending && (
+            <Flex direction="column" gap="0.25rem">
+              <Text size="1" color="gray">
+                Choose canonical profile (others will be absorbed):
+              </Text>
+              {selectedProfiles.map((p) => (
+                <Flex key={p.id} align="center" gap="0.5rem">
+                  <input
+                    type="radio"
+                    name="merge-canonical"
+                    value={p.id}
+                    checked={
+                      (mergeCanonicalId ?? defaultCanonical) === p.id
+                    }
+                    onChange={() => setMergeCanonicalId(p.id)}
+                  />
+                  <Text size="2">{p.name}</Text>
+                  <Text size="1" color="gray">
+                    ({p.sampleCount ?? 1} samples)
+                  </Text>
+                </Flex>
+              ))}
+              <Flex gap="0.5rem" mt="0.25rem">
+                <Button
+                  type="button"
+                  size="1"
+                  color="blue"
+                  disabled={mergeMutation.isPending}
+                  onClick={handleMergeConfirm}
+                >
+                  {mergeMutation.isPending ? "Merging…" : "Confirm merge"}
+                </Button>
+                <Button
+                  type="button"
+                  size="1"
+                  variant="ghost"
+                  onClick={() => {
+                    setMergePending(false);
+                    setMergeCanonicalId(null);
+                  }}
+                >
+                  Cancel
+                </Button>
+              </Flex>
+            </Flex>
+          )}
+        </Flex>
+      )}
       {profiles && profiles.length > 0 && (
         <Flex direction="column" gap="0.25rem" mt="0.5rem">
           {profiles.map((profile) => (
@@ -775,6 +985,72 @@ const SpeakerProfilesPanel: FC = () => {
               py="0.25rem"
               style={{ borderBottom: "1px solid var(--gray-a4)" }}
             >
+              {/* Selection checkbox */}
+              <input
+                type="checkbox"
+                checked={selectedIds.has(profile.id)}
+                onChange={() => toggleSelect(profile.id)}
+                style={{ cursor: "pointer", flexShrink: 0 }}
+              />
+
+              {/* Avatar circle */}
+              <div
+                style={{
+                  width: 28,
+                  height: 28,
+                  borderRadius: "50%",
+                  overflow: "hidden",
+                  flexShrink: 0,
+                  cursor: "pointer",
+                  position: "relative",
+                  background: avatarUrls[profile.id]
+                    ? undefined
+                    : profileAvatarColor(profile.id),
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: "white",
+                  userSelect: "none",
+                }}
+                title="Click to set avatar"
+                onClick={() => {
+                  setUploadTargetId(profile.id);
+                  fileInputRef.current?.click();
+                }}
+              >
+                {avatarUrls[profile.id] ? (
+                  <img
+                    src={avatarUrls[profile.id]!}
+                    alt=""
+                    style={{
+                      width: "100%",
+                      height: "100%",
+                      objectFit: "cover",
+                    }}
+                  />
+                ) : (
+                  profileInitials(profile.name)
+                )}
+              </div>
+
+              {/* Delete avatar button (only when avatar is set) */}
+              {avatarUrls[profile.id] && (
+                <IconButton
+                  variant="ghost"
+                  color="gray"
+                  size="1"
+                  title="Remove avatar"
+                  onClick={() => deleteAvatarMutation.mutate(profile.id)}
+                  aria-label="Remove avatar"
+                  style={{ flexShrink: 0 }}
+                >
+                  <HiMiniXMark />
+                </IconButton>
+              )}
+
+              {/* Profile name (click to rename) */}
               <Text
                 style={{ flexGrow: 1, cursor: "pointer" }}
                 onClick={() => {
@@ -805,7 +1081,7 @@ const SpeakerProfilesPanel: FC = () => {
                 onClick={() => {
                   if (
                     window.confirm(
-                      `Delete voice profile “${profile.name}”? Future recordings will no longer be auto-labeled for this speaker.`,
+                      `Delete voice profile "${profile.name}"? Future recordings will no longer be auto-labeled for this speaker.`,
                     )
                   ) {
                     removeMutation.mutate(profile.id);
@@ -822,6 +1098,26 @@ const SpeakerProfilesPanel: FC = () => {
     </>
   );
 };
+
+/** Derive a stable background color from a profile id for avatar initials. */
+function profileAvatarColor(id: string): string {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) {
+    // eslint-disable-next-line no-bitwise
+    hash = (hash << 5) - hash + id.charCodeAt(i);
+    // eslint-disable-next-line no-bitwise
+    hash |= 0;
+  }
+  const hue = Math.abs(hash) % 360;
+  return `hsl(${hue}, 55%, 45%)`;
+}
+
+/** Extract up to 2 initials from a display name. */
+function profileInitials(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  if (parts.length === 1) return (parts[0]?.slice(0, 2) ?? "").toUpperCase();
+  return `${parts[0]?.[0] ?? ""}${parts[1]?.[0] ?? ""}`.toUpperCase();
+}
 
 const CudaHealthPanel: FC = () => {
   const qc = useQueryClient();
@@ -873,7 +1169,7 @@ const CudaHealthPanel: FC = () => {
       >
         <Spinner size="1" />
         <Text size="2" color="gray">
-          Checking CUDA availability…
+          Checking CUDA availability...
         </Text>
       </Flex>
     );
@@ -886,7 +1182,7 @@ const CudaHealthPanel: FC = () => {
           <HiOutlineXCircle />
         </Callout.Icon>
         <Callout.Text>
-          No NVIDIA GPU detected — transcription will use CPU.
+          No NVIDIA GPU detected - transcription will use CPU.
         </Callout.Text>
       </Callout.Root>
     );
@@ -940,7 +1236,7 @@ const CudaHealthPanel: FC = () => {
           >
             {installing ? (
               <>
-                <Spinner size="1" /> Installing…
+                <Spinner size="1" /> Installing...
               </>
             ) : (
               "Fix: Install CUDA torch"
@@ -985,7 +1281,7 @@ const CudaHealthPanel: FC = () => {
               wordBreak: "break-word",
             }}
           >
-            {installState.log || "Starting…"}
+            {installState.log || "Starting..."}
           </pre>
         )}
       </Flex>

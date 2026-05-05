@@ -125,6 +125,13 @@ export type SpeakerProfile = {
   createdAt: string;
   updatedAt: string;
   sampleCount: number;
+  /** Alternative names used for fuzzy lookup in rename autocomplete. */
+  aliases?: string[];
+  /**
+   * Basename of the avatar file stored under `<userData>/speaker-avatars/`.
+   * e.g. `"abc123.png"`. Full path resolved server-side via `getSpeakerAvatarPath`.
+   */
+  avatar?: string;
 };
 
 export type RecordingTranscript = {
