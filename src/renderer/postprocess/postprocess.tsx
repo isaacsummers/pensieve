@@ -28,7 +28,10 @@ export const Postprocess: FC = () => {
   }, [data?.processingQueue]);
 
   const hasQueueCompleted = useMemo(
-    () => data?.processingQueue.every((item) => item.status !== "queued" && item.status !== "processing"),
+    () =>
+      data?.processingQueue.every(
+        (item) => item.status !== "queued" && item.status !== "processing",
+      ),
     [data?.processingQueue],
   );
 

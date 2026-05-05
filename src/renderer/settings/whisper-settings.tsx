@@ -825,8 +825,7 @@ const CudaHealthPanel: FC = () => {
   const { data: installState } = useQuery({
     queryKey: [QueryKeys.WhisperxCudaInstallState],
     queryFn: whisperxApi.getCudaInstallState,
-    refetchInterval: (q) =>
-      q.state.data?.inProgress ? 2000 : false,
+    refetchInterval: (q) => (q.state.data?.inProgress ? 2000 : false),
   });
 
   const reinstall = useMutation({
@@ -905,8 +904,8 @@ const CudaHealthPanel: FC = () => {
             <HiOutlineExclamationTriangle />
           </Callout.Icon>
           <Callout.Text>
-            GPU detected but PyTorch has no CUDA support. WhisperX will crash
-            on first run.
+            GPU detected but PyTorch has no CUDA support. WhisperX will crash on
+            first run.
           </Callout.Text>
         </Callout.Root>
         <Flex align="center" gap="0.5rem" wrap="wrap">

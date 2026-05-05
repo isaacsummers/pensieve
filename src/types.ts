@@ -17,10 +17,52 @@ export type RecordingConfig = {
   additionalAudioDevices?: MediaDeviceInfo[];
 };
 
+/**
+ * One captured audio device. The primary mic is the one selected as the
+ * "main" input; any additional inputs/outputs (e.g. SteelSeries Sonar's
+ * Gaming/Chat/Media virtual outputs) ride alongside it as separate
+ * recorders so each track can be reviewed individually on disk.
+ */
+export type CapturedMicTrack = {
+  data: ArrayBuffer;
+  /** True for the user-selected primary microphone. */
+  isPrimary: boolean;
+  /** The device's enumerated kind. Outputs are best-effort captures. */
+  kind: "input" | "output";
+  /** Original device label as reported by `navigator.mediaDevices`. */
+  label: string;
+  /** Persistent device id (may rotate across sessions). */
+  deviceId: string;
+};
+
 export type RecordingData = {
+  /** Primary mic buffer. Kept for backwards compatibility. */
   mic?: ArrayBuffer | null;
+  /**
+   * Additional captured audio tracks (extra inputs and best-effort outputs)
+   * saved next to the primary mic. Each is written as its own file so the
+   * raw per-device audio is preserved; post-processing merges them all
+   * into a single mix for transcription.
+   */
+  additionalMicTracks?: CapturedMicTrack[];
   screen?: ArrayBuffer | null;
   meta: RecordingMeta;
+};
+
+/**
+ * On-disk record of an additional mic track captured alongside the primary
+ * `mic.webm`. Stored on `RecordingMeta` so the post-processing pipeline can
+ * locate every track when building the merged transcription input.
+ */
+export type AdditionalMicFile = {
+  /** File name relative to the recording folder (e.g. `mic-headset.webm`). */
+  fileName: string;
+  /** Original device label. */
+  label: string;
+  /** Original device id at recording time. */
+  deviceId: string;
+  /** Whether the device was an audio input or audio output. */
+  kind: "input" | "output";
 };
 
 export type RecordingMeta = {
@@ -32,6 +74,12 @@ export type RecordingMeta = {
   hasRawRecording?: boolean;
   hasMic?: boolean;
   hasScreen?: boolean;
+  /**
+   * Per-device audio tracks captured alongside the primary mic. Empty or
+   * missing for single-device recordings. Used by the post-processing
+   * merge step to gather every track for WhisperX.
+   */
+  additionalMicFiles?: AdditionalMicFile[];
   language?: string;
   notes?: string;
   timestampedNotes?: Record<number, string>;

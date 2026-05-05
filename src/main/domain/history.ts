@@ -1,7 +1,12 @@
 import path from "path";
 import fs from "fs-extra";
 import { app, shell } from "electron";
-import { RecordingData, RecordingMeta, RecordingTranscript } from "../../types";
+import {
+  AdditionalMicFile,
+  RecordingData,
+  RecordingMeta,
+  RecordingTranscript,
+} from "../../types";
 import { invalidateUiKeys } from "../ipc/invalidate-ui";
 import { QueryKeys } from "../../query-keys";
 import * as searchIndex from "./search";
@@ -9,6 +14,7 @@ import * as ffmpeg from "./ffmpeg";
 import * as settings from "./settings";
 import * as postprocess from "./postprocess";
 import { getDuration } from "./ffmpeg";
+import { planAdditionalMicFiles } from "./recording-files";
 
 export const getRecordingsFolder = async () => {
   return (await settings.getSettings()).core.recordingsFolder;
@@ -35,12 +41,22 @@ export const storeUnassociatedScreenshot = async (
 
 export const saveRecording = async (recording: RecordingData) => {
   const started = new Date(recording.meta.started);
+  // Plan additional mic file names up front so we can record them in meta.
+  const additionalPlan = planAdditionalMicFiles(
+    recording.additionalMicTracks ?? [],
+  );
+  const additionalMicFiles: AdditionalMicFile[] = additionalPlan.map(
+    (p) => p.file,
+  );
+
   const meta: RecordingMeta = {
     duration: Date.now() - started.getTime(),
     isPostProcessed: false,
     hasRawRecording: true,
     hasMic: !!recording.mic,
     hasScreen: !!recording.screen,
+    additionalMicFiles:
+      additionalMicFiles.length > 0 ? additionalMicFiles : undefined,
     ...recording.meta,
   };
 
@@ -51,6 +67,13 @@ export const saveRecording = async (recording: RecordingData) => {
     await fs.writeFile(
       path.join(folder, "mic.webm"),
       Buffer.from(recording.mic),
+    );
+  }
+  for (const { track, file } of additionalPlan) {
+    // eslint-disable-next-line no-await-in-loop
+    await fs.writeFile(
+      path.join(folder, file.fileName),
+      Buffer.from(track.data),
     );
   }
   if (recording.screen) {

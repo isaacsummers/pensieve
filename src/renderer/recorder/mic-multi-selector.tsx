@@ -181,9 +181,9 @@ export const MicMultiSelector: FC = () => {
                 ))}
                 <Text size="1" color="gray">
                   Note: capture of plain output devices is best-effort. True
-                  loopback requires WASAPI; unsupported devices will be
-                  skipped at record time. Stereo channel separation per
-                  device is future work.
+                  loopback requires WASAPI; unsupported devices will be skipped
+                  at record time. Stereo channel separation per device is future
+                  work.
                 </Text>
               </Flex>
             )}

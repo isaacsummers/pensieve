@@ -27,8 +27,8 @@ const getUvAssetForPlatform = (): {
   archive: string;
   binary: string;
 } => {
-  const platform = process.platform;
-  const arch = process.arch;
+  const { platform } = process;
+  const { arch } = process;
   const base = `https://github.com/astral-sh/uv/releases/download/${UV_VERSION}`;
   if (platform === "win32" && arch === "x64") {
     return {

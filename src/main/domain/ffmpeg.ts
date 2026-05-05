@@ -440,6 +440,53 @@ export const toJoinedFile = async (
   }
 };
 
+/**
+ * Merge N audio inputs into a single mono mix using ffmpeg `amix`. Used to
+ * combine the primary mic + per-device additional tracks into one audio
+ * file before WhisperX transcription so the transcript stays a single
+ * coherent piece. Each input is normalized to stereo first so amix doesn't
+ * silently drop channels on mono/stereo mismatches.
+ *
+ * - 0 inputs: rejects (callers should fall back to whatever single track
+ *   they have).
+ * - 1 input: simple transcode — amix with one source is a no-op but we
+ *   still rewrap so downstream code can rely on the merged file existing.
+ * - N inputs: amix with `duration=longest` to match `toJoinedFile`'s
+ *   shape.
+ */
+export const mergeAudioTracks = async (inputs: string[], output: string) => {
+  await ensureFFmpegAvailable();
+  const bin = await resolveFfmpegPath();
+  if (inputs.length === 0) {
+    throw new Error("mergeAudioTracks requires at least one input");
+  }
+
+  if (inputs.length === 1) {
+    await runner.execute(bin, ["-i", inputs[0], "-y", output], {
+      stdio: "inherit",
+    });
+    return;
+  }
+
+  const args: string[] = [];
+  inputs.forEach((p) => {
+    args.push("-i", p);
+  });
+  // Build `[0:a]aformat=...[a0];[1:a]aformat=...[a1];...[a0][a1]...amix=inputs=N:duration=longest[aout]`.
+  const labels: string[] = [];
+  const normalize: string[] = [];
+  inputs.forEach((_, i) => {
+    const label = `a${i}`;
+    labels.push(`[${label}]`);
+    normalize.push(`[${i}:a]aformat=channel_layouts=stereo[${label}]`);
+  });
+  const filter = `${normalize.join(";")};${labels.join("")}amix=inputs=${
+    inputs.length
+  }:duration=longest[aout]`;
+  args.push("-filter_complex", filter, "-map", "[aout]", "-y", output);
+  await runner.execute(bin, args, { stdio: "inherit" });
+};
+
 export const getDuration = async (input: string) => {
   await ensureFFmpegAvailable();
   const bin = await resolveFfmpegPath();

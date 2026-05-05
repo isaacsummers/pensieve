@@ -59,7 +59,9 @@ log.initialize({ spyRendererConsole: true });
   }
   if (toPrepend.length > 0) {
     process.env.PATH = [...toPrepend, currentPath].filter(Boolean).join(sep);
-    log.info(`[startup] prepended uv search dirs to PATH: ${toPrepend.join(", ")}`);
+    log.info(
+      `[startup] prepended uv search dirs to PATH: ${toPrepend.join(", ")}`,
+    );
   }
 })();
 

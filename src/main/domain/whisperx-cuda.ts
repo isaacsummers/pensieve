@@ -40,7 +40,9 @@ let installState: CudaInstallState = {
   log: "",
 };
 
-export const getCudaInstallState = (): CudaInstallState => ({ ...installState });
+export const getCudaInstallState = (): CudaInstallState => ({
+  ...installState,
+});
 
 const appendLog = (chunk: string) => {
   const next = (installState.log + chunk).slice(-MAX_LOG_CHARS);
@@ -168,7 +170,10 @@ const probeTorch = async (
       { stdio: "pipe", timeout: 30_000, reject: false },
     );
     if (r.exitCode !== 0) return { available: false, version: null };
-    const lines = r.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const lines = r.stdout
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
     const available = /^true$/i.test(lines[0] ?? "");
     const version = lines[1] ?? null;
     return { available, version };
@@ -189,7 +194,9 @@ const probeTorch = async (
  */
 export class CudaTorchMissingError extends Error {
   readonly code = "CUDA_TORCH_MISSING" as const;
+
   readonly suggestedIndexUrl: string | null;
+
   constructor(suggestedIndexUrl: string | null) {
     super(
       "CUDA torch is not installed. WhisperX cannot use your GPU. " +

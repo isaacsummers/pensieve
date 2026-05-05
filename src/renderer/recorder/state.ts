@@ -2,11 +2,11 @@ import { create } from "zustand";
 import { useCallback } from "react";
 import { historyApi, mainApi, recorderIpcApi } from "../api";
 import { blobToBuffer } from "../../utils";
-import { RecordingConfig, RecordingMeta } from "../../types";
-import { createRecorder } from "./create-recorder";
+import { CapturedMicTrack, RecordingConfig, RecordingMeta } from "../../types";
+import { MicTrack, createRecorder } from "./create-recorder";
 
 type RecorderState = {
-  recorder?: { screen: MediaRecorder | null; mic: MediaRecorder | null };
+  recorder?: { screen: MediaRecorder | null; mic: MicTrack[] };
   meta: RecordingMeta;
   recordingConfig: RecordingConfig;
   isPaused: boolean;
@@ -83,7 +83,7 @@ export const useRecorderState = create<RecorderState>()((_set, get) => {
     hydrateFromSettings: async () => {
       try {
         const settings = await mainApi.getSettings();
-        const recording = settings.recording;
+        const { recording } = settings;
         if (!recording) return;
         const devices = await navigator.mediaDevices.enumerateDevices();
         const audioInputs = devices.filter((d) => d.kind === "audioinput");
@@ -145,12 +145,12 @@ export const useRecorderState = create<RecorderState>()((_set, get) => {
         isPaused: false,
       }),
     pause: () => {
-      get().recorder?.mic?.pause();
+      get().recorder?.mic?.forEach((t) => t.recorder.pause());
       get().recorder?.screen?.pause();
       set({ isPaused: true });
     },
     resume: () => {
-      get().recorder?.mic?.resume();
+      get().recorder?.mic?.forEach((t) => t.recorder.resume());
       get().recorder?.screen?.resume();
       set({ isPaused: false });
     },
@@ -205,15 +205,50 @@ const unpackMediaRecorder = async (
   });
 };
 
+const unpackMicTracks = async (
+  tracks: MicTrack[] | undefined,
+  type = "audio/webm",
+): Promise<CapturedMicTrack[]> => {
+  if (!tracks || tracks.length === 0) return [];
+  // Run unpacks in parallel — each track has its own MediaRecorder so they
+  // produce blobs independently. Order doesn't matter here; we tag the
+  // primary explicitly via `isPrimary`.
+  return Promise.all(
+    tracks.map(
+      (track) =>
+        new Promise<CapturedMicTrack>((resolve) => {
+          track.recorder.stop();
+          // eslint-disable-next-line no-param-reassign
+          track.recorder.ondataavailable = async (e) => {
+            const blob = new Blob([e.data], { type });
+            const buffer = await blobToBuffer(blob);
+            resolve({
+              data: buffer,
+              isPrimary: track.isPrimary,
+              kind: track.kind,
+              label: track.label,
+              deviceId: track.deviceId,
+            });
+          };
+        }),
+    ),
+  );
+};
+
 export const useStopRecording = () => {
   const { recorder, meta, reset } = useRecorderState();
   return useCallback(async () => {
     if (!recorder || !meta) return;
 
     reset();
+    const screenBuffer = await unpackMediaRecorder(recorder.screen);
+    const micTracks = await unpackMicTracks(recorder.mic);
+    const primary = micTracks.find((t) => t.isPrimary) ?? null;
+    const additional = micTracks.filter((t) => !t.isPrimary);
     await historyApi.saveRecording({
-      mic: await unpackMediaRecorder(recorder.mic),
-      screen: await unpackMediaRecorder(recorder.screen),
+      mic: primary?.data ?? null,
+      additionalMicTracks: additional,
+      screen: screenBuffer,
       meta,
     });
   }, [meta, recorder, reset]);

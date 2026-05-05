@@ -120,9 +120,7 @@ export const saveSettings = async (partialSettings: DeepPartial<Settings>) => {
  * `additionalAudioDevices` instead of replacing it on every persist. Here we
  * read, replace the whole `recording` object, and write back.
  */
-export const updateRecordingSettings = async (
-  patch: Settings["recording"],
-) => {
+export const updateRecordingSettings = async (patch: Settings["recording"]) => {
   const current = (await readSettings({})) as DeepPartial<Settings>;
   const next = { ...current, recording: patch };
   await fs.writeJSON(settingsFile, next, { spaces: 2 });

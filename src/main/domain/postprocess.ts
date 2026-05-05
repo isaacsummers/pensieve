@@ -177,11 +177,61 @@ export const clearCompleted = () => {
 
 const getFilePaths = async (job: PostProcessingJob) => {
   const recordingsFolder = await getRecordingsFolder();
-  const mic = path.join(recordingsFolder, job.recordingId, "mic.webm");
-  const screen = path.join(recordingsFolder, job.recordingId, "screen.webm");
-  const wav = path.join(recordingsFolder, job.recordingId, "whisper-input.wav");
-  const mp3 = path.join(recordingsFolder, job.recordingId, "recording.mp3");
-  return { mic, screen, wav, mp3, recordingsFolder };
+  const recordingFolder = path.join(recordingsFolder, job.recordingId);
+  const mic = path.join(recordingFolder, "mic.webm");
+  const screen = path.join(recordingFolder, "screen.webm");
+  const wav = path.join(recordingFolder, "whisper-input.wav");
+  const mp3 = path.join(recordingFolder, "recording.mp3");
+  const mergedMic = path.join(recordingFolder, "mic-merged.webm");
+  return {
+    mic,
+    screen,
+    wav,
+    mp3,
+    mergedMic,
+    recordingFolder,
+    recordingsFolder,
+  };
+};
+
+/**
+ * Resolve the on-disk paths of every additional mic file for this
+ * recording. Reads the recording meta to get the authoritative list — the
+ * folder may also contain stale files from prior runs (e.g. a re-run after
+ * deletion), so we trust meta over the directory listing.
+ */
+const getAdditionalMicPaths = async (
+  job: PostProcessingJob,
+): Promise<string[]> => {
+  const meta = await history
+    .getRecordingMeta(job.recordingId)
+    .catch(() => null);
+  if (!meta?.additionalMicFiles?.length) return [];
+  const { recordingFolder } = await getFilePaths(job);
+  return meta.additionalMicFiles
+    .map((f) => path.join(recordingFolder, f.fileName))
+    .filter((p) => fs.existsSync(p));
+};
+
+/**
+ * Pick the mic input for downstream wav/mp3 steps. When the recording has
+ * additional per-device tracks we merge them with the primary mic into a
+ * single `mic-merged.webm` first so WhisperX gets one coherent track. The
+ * individual files stay on disk untouched.
+ *
+ * Returns `null` when there is no mic input at all (screen-only).
+ */
+const getMergedMicPath = async (
+  job: PostProcessingJob,
+): Promise<string | null> => {
+  const { mic, mergedMic } = await getFilePaths(job);
+  const additional = await getAdditionalMicPaths(job);
+  const inputs = [...(fs.existsSync(mic) ? [mic] : []), ...additional];
+  if (inputs.length === 0) return null;
+  if (inputs.length === 1) return inputs[0];
+  if (fs.existsSync(mergedMic)) return mergedMic;
+  await ffmpeg.mergeAudioTracks(inputs, mergedMic);
+  return mergedMic;
 };
 
 const hasStep = (job: PostProcessingJob, step: PostProcessingStep) => {
@@ -195,12 +245,13 @@ const doWavStep = async (job: PostProcessingJob) => {
   if (hasAborted() || isCancelMidProcessing(job) || !hasStep(job, "wav"))
     return;
   setStep("wav");
-  const { mic, screen, wav } = await getFilePaths(job);
+  const { screen, wav } = await getFilePaths(job);
+  const mergedMic = await getMergedMicPath(job);
 
-  if (fs.existsSync(mic) && fs.existsSync(screen)) {
-    await ffmpeg.toStereoWavFile(mic, screen, wav);
-  } else if (fs.existsSync(mic)) {
-    await ffmpeg.toWavFile(mic, wav);
+  if (mergedMic && fs.existsSync(screen)) {
+    await ffmpeg.toStereoWavFile(mergedMic, screen, wav);
+  } else if (mergedMic) {
+    await ffmpeg.toWavFile(mergedMic, wav);
   } else if (fs.existsSync(screen)) {
     await ffmpeg.toWavFile(screen, wav);
   } else {
@@ -212,12 +263,13 @@ const doMp3Step = async (job: PostProcessingJob) => {
   if (hasAborted() || isCancelMidProcessing(job) || !hasStep(job, "mp3"))
     return;
   setStep("mp3");
-  const { mic, screen, mp3 } = await getFilePaths(job);
+  const { screen, mp3 } = await getFilePaths(job);
+  const mergedMic = await getMergedMicPath(job);
 
-  if (fs.existsSync(mic) && fs.existsSync(screen)) {
-    await ffmpeg.toJoinedFile(mic, screen, mp3);
-  } else if (fs.existsSync(mic)) {
-    await ffmpeg.toJoinedFile(mic, null, mp3);
+  if (mergedMic && fs.existsSync(screen)) {
+    await ffmpeg.toJoinedFile(mergedMic, screen, mp3);
+  } else if (mergedMic) {
+    await ffmpeg.toJoinedFile(mergedMic, null, mp3);
   } else if (fs.existsSync(screen)) {
     await ffmpeg.toJoinedFile(screen, null, mp3);
   } else {
@@ -226,11 +278,7 @@ const doMp3Step = async (job: PostProcessingJob) => {
 };
 
 const doWhisperStep = async (job: PostProcessingJob) => {
-  if (
-    hasAborted() ||
-    isCancelMidProcessing(job) ||
-    !hasStep(job, "whisper")
-  )
+  if (hasAborted() || isCancelMidProcessing(job) || !hasStep(job, "whisper"))
     return;
   const { wav, mp3, recordingsFolder } = await getFilePaths(job);
 
@@ -323,7 +371,8 @@ const postProcessRecording = async (job: PostProcessingJob) => {
 
   const settings = await getSettings();
 
-  const { mic, screen } = await getFilePaths(job);
+  const { mic, screen, mergedMic } = await getFilePaths(job);
+  const additional = await getAdditionalMicPaths(job);
   if (settings.ffmpeg.removeRawRecordings) {
     if (fs.existsSync(mic)) {
       await fs.rm(mic);
@@ -331,7 +380,18 @@ const postProcessRecording = async (job: PostProcessingJob) => {
     if (fs.existsSync(screen)) {
       await fs.rm(screen);
     }
+    for (const p of additional) {
+      if (fs.existsSync(p)) {
+        // eslint-disable-next-line no-await-in-loop
+        await fs.rm(p);
+      }
+    }
     await history.updateRecording(job.recordingId, { hasRawRecording: false });
+  }
+  // The merged mic file is always intermediate — it's only ever used to
+  // feed the wav/mp3 steps and isn't part of the on-disk archive.
+  if (fs.existsSync(mergedMic)) {
+    await fs.rm(mergedMic).catch(() => {});
   }
 
   const transcript = await getRecordingTranscript(job.recordingId);
