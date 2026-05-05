@@ -189,11 +189,17 @@ export const TranscriptItem = memo<{
 
     /**
      * Resolution order:
-     *  1. Explicit per-recording override (user typed a custom name)
-     *  2. Live profile name lookup via speakerMatches profileId
-     *  3. undefined (SpeakerTitle will fall back to "Speaker N")
+     *  1. Per-item override (speakerItemOverrides[index]) — highest priority
+     *  2. Explicit per-recording override (user typed a custom name)
+     *  3. Live profile name lookup via speakerMatches profileId
+     *  4. undefined (SpeakerTitle will fall back to "Speaker N")
      */
+    const itemOverrideProfileId = meta.speakerItemOverrides?.[String(index)];
+    const hasItemOverride = !!itemOverrideProfileId;
     const speakerDisplayName =
+      (itemOverrideProfileId
+        ? profilesById[itemOverrideProfileId]?.name
+        : undefined) ??
       meta.speakerNames?.[item.speaker] ??
       (speakerMatch?.profileId
         ? profilesById[speakerMatch.profileId]?.name
@@ -247,6 +253,32 @@ export const TranscriptItem = memo<{
       [recordingId, item.speaker, updateMeta, meta.speakerMatches],
     );
 
+    const onItemOverrideApplied = useCallback(
+      async (_itemIndex: number, profileId: string) => {
+        // The IPC was already called by the picker (setTranscriptItemSpeakerOverride).
+        // We just need to update the local meta to reflect the new override.
+        const nextOverrides = {
+          ...(meta.speakerItemOverrides ?? {}),
+          [String(index)]: profileId,
+        };
+        await updateMeta({ speakerItemOverrides: nextOverrides });
+      },
+      [index, meta.speakerItemOverrides, updateMeta],
+    );
+
+    const onClearItemOverride = useCallback(
+      async (_itemIndex: number) => {
+        await speakerProfilesApi.clearTranscriptItemSpeakerOverride(
+          recordingId,
+          index,
+        );
+        const nextOverrides = { ...(meta.speakerItemOverrides ?? {}) };
+        delete nextOverrides[String(index)];
+        await updateMeta({ speakerItemOverrides: nextOverrides });
+      },
+      [recordingId, index, meta.speakerItemOverrides, updateMeta],
+    );
+
     return (
       <TranscriptItemUi
         key={item.timestamps.from}
@@ -273,6 +305,10 @@ export const TranscriptItem = memo<{
         onTogglePlaying={onTogglePlaying}
         onToggleHighlight={onToggleHighlight}
         nextItems={nextItems}
+        itemIndex={index}
+        hasItemOverride={hasItemOverride}
+        onItemOverrideApplied={onItemOverrideApplied}
+        onClearItemOverride={onClearItemOverride}
       />
     );
   },

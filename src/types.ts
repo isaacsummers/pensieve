@@ -114,6 +114,12 @@ export type RecordingMeta = {
    * explicitly dismissed for this recording. Prevents re-surfacing the pill.
    */
   rejectedSuggestions?: Record<string, string[]>;
+  /**
+   * Per-item speaker overrides. Key is the transcript item index (number as string).
+   * Value is a profileId. Overrides recording-level speakerNames/speakerMatches
+   * for that specific item only.
+   */
+  speakerItemOverrides?: Record<string, string>; // itemIndex (as string) → profileId
   /** Most recent non-fatal pipeline error surfaced on this recording. */
   pipelineError?: { stage: string; message: string } | null;
   /**

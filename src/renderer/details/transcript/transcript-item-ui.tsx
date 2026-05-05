@@ -36,6 +36,14 @@ export const TranscriptItemUi = memo<{
   onTogglePlaying: () => void;
   onToggleHighlight: () => void;
   nextItems?: ReactNode;
+  /** The item index within the transcript (for per-segment overrides). */
+  itemIndex?: number;
+  /** Whether a per-segment speaker override is active for this item. */
+  hasItemOverride?: boolean;
+  /** Called when a per-segment override is applied via the picker. */
+  onItemOverrideApplied?: (itemIndex: number, profileId: string) => void;
+  /** Called to clear the per-segment speaker override. */
+  onClearItemOverride?: (itemIndex: number) => void;
 }>(
   ({
     text,
@@ -60,9 +68,13 @@ export const TranscriptItemUi = memo<{
     onTogglePlaying,
     onToggleHighlight,
     nextItems,
+    itemIndex,
+    hasItemOverride,
+    onItemOverrideApplied,
+    onClearItemOverride,
   }) => (
     <>
-      {isNewSpeaker && (
+      {(isNewSpeaker || hasItemOverride) && (
         <SpeakerTitle
           speaker={speaker}
           timeText={timeText}
@@ -77,6 +89,10 @@ export const TranscriptItemUi = memo<{
           recordingId={recordingId}
           suggestThreshold={suggestThreshold}
           rejectedSuggestions={rejectedSuggestions}
+          itemIndex={itemIndex}
+          hasItemOverride={hasItemOverride}
+          onItemOverrideApplied={onItemOverrideApplied}
+          onClearOverride={onClearItemOverride}
         />
       )}
       <Box

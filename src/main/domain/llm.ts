@@ -98,9 +98,9 @@ const prepareContext = async (
   const splitDocs = await splitter.splitDocuments([
     new Document({
       pageContent: transcript.transcription
-        .map((t) => {
+        .map((t, i) => {
           const speakerText = meta
-            ? resolveSpeakerDisplayName(t.speaker, meta, profilesById)
+            ? resolveSpeakerDisplayName(t.speaker, meta, profilesById, i)
             : t.speaker === "0"
               ? "They"
               : t.speaker === "1"

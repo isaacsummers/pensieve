@@ -2,7 +2,6 @@ import { FC, useEffect, useRef, useState } from "react";
 import {
   Avatar,
   Badge,
-  Button,
   Flex,
   IconButton,
   Text,
@@ -29,7 +28,7 @@ const defaultLabel = (speakerKey: string) => {
 export const SpeakerTitle: FC<{
   timeText: string;
   speaker: string;
-  /** Optional override name (from recording meta.speakerNames). */
+  /** Optional override name (from recording meta.speakerNames or speakerItemOverrides). */
   displayName?: string;
   /** Optional match info from the embedding pipeline. */
   match?: {
@@ -54,6 +53,14 @@ export const SpeakerTitle: FC<{
   rejectedSuggestions?: string[];
   /** recordingId, needed to pass to the picker for assignment. */
   recordingId?: string;
+  /** The transcript item index for this speaker header (used for per-item overrides). */
+  itemIndex?: number;
+  /** Whether this item has a per-segment speaker override applied. */
+  hasItemOverride?: boolean;
+  /** Called when a per-segment override is applied (profileId already saved by picker). */
+  onItemOverrideApplied?: (itemIndex: number, profileId: string) => void;
+  /** Called to clear the per-segment speaker override. */
+  onClearOverride?: (itemIndex: number) => void;
 }> = ({
   timeText,
   speaker,
@@ -68,11 +75,16 @@ export const SpeakerTitle: FC<{
   suggestThreshold = 0.65,
   rejectedSuggestions,
   recordingId,
+  itemIndex,
+  hasItemOverride,
+  onItemOverrideApplied,
+  onClearOverride,
 }) => {
   const effective = displayName?.trim() || defaultLabel(speaker);
   const [isEditing, setIsEditing] = useState(false);
   const [value, setValue] = useState(effective);
   const [showPicker, setShowPicker] = useState(false);
+  const [showOverridePicker, setShowOverridePicker] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -172,18 +184,34 @@ export const SpeakerTitle: FC<{
           <Text weight="bold" style={{ flexGrow: 1 }}>
             {effective}
           </Text>
-          {match?.matched && (
+          {hasItemOverride && (
+            <Tooltip content="Speaker overridden for this segment only. Click to clear.">
+              <Badge
+                color="violet"
+                variant="soft"
+                style={{ cursor: onClearOverride && itemIndex !== undefined ? "pointer" : undefined }}
+                onClick={() => {
+                  if (onClearOverride && itemIndex !== undefined) {
+                    onClearOverride(itemIndex);
+                  }
+                }}
+              >
+                overridden ✕
+              </Badge>
+            </Tooltip>
+          )}
+          {!hasItemOverride && match?.matched && (
             <Tooltip
               content={`Auto-labeled from profile \u201C${
                 match.profileName ?? effective
               }\u201D (similarity ${match.confidence.toFixed(2)})`}
             >
               <Badge color="jade" variant="soft">
-                auto \u00b7 {Math.round(match.confidence * 100)}%
+                auto · {Math.round(match.confidence * 100)}%
               </Badge>
             </Tooltip>
           )}
-          {showSuggestionPill && match && (
+          {!hasItemOverride && showSuggestionPill && match && (
             <Flex align="center" gap=".25rem">
               <Tooltip
                 content={`Voice matches profile \u201C${match.profileName}\u201D with ${Math.round(match.confidence * 100)}% similarity. Confirm to link this speaker to the profile.`}
@@ -220,7 +248,7 @@ export const SpeakerTitle: FC<{
               </Tooltip>
             </Flex>
           )}
-          {!match?.matched && !showSuggestionPill && match && (
+          {!hasItemOverride && !match?.matched && !showSuggestionPill && match && (
             <Tooltip
               content={
                 match.profileName
@@ -259,8 +287,8 @@ export const SpeakerTitle: FC<{
               </IconButton>
             </Tooltip>
           )}
-          {/* Identify button — show when the speaker isn't fully matched yet */}
-          {!match?.matched && onAssignToProfile && recordingId && (
+          {/* Identify button — show when the speaker isn't fully matched yet and no item override */}
+          {!match?.matched && !hasItemOverride && onAssignToProfile && recordingId && (
             <Tooltip content="Identify this speaker from your profile directory">
               <IconButton
                 variant="ghost"
@@ -268,6 +296,20 @@ export const SpeakerTitle: FC<{
                 className="hoverhide-item"
                 onClick={() => setShowPicker(true)}
                 aria-label="Identify speaker"
+              >
+                <HiOutlineIdentification />
+              </IconButton>
+            </Tooltip>
+          )}
+          {/* Override segment button — available when itemIndex is provided */}
+          {itemIndex !== undefined && recordingId && (
+            <Tooltip content="Override speaker for this segment only">
+              <IconButton
+                variant="ghost"
+                size="1"
+                className="hoverhide-item"
+                onClick={() => setShowOverridePicker(true)}
+                aria-label="Override speaker for this segment"
               >
                 <HiOutlineIdentification />
               </IconButton>
@@ -288,6 +330,26 @@ export const SpeakerTitle: FC<{
         }}
         onClose={() => setShowPicker(false)}
         onSuggestEmbeddingUpdate={onSuggestEmbeddingUpdate}
+      />
+    )}
+    {showOverridePicker && recordingId && itemIndex !== undefined && (
+      <SpeakerDirectoryPicker
+        speakerKey={speaker}
+        recordingId={recordingId}
+        currentProfileId={undefined}
+        isSegmentOverride
+        itemIndex={itemIndex}
+        currentSpeakerName={effective}
+        onAssigned={(profileId) => {
+          setShowOverridePicker(false);
+          onItemOverrideApplied?.(itemIndex, profileId);
+        }}
+        onClose={() => setShowOverridePicker(false)}
+        onClearOverride={() => {
+          if (onClearOverride && itemIndex !== undefined) {
+            onClearOverride(itemIndex);
+          }
+        }}
       />
     )}
   </>

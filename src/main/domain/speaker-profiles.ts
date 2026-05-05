@@ -1398,20 +1398,31 @@ export const updateSpeakerAliases = async (
 /**
  * Resolve a display name for a speaker key from recording meta + loaded profiles.
  * Resolution order:
- *   1. meta.speakerNames[key]       — explicit per-recording override
- *   2. profile.name via profileId   — live lookup through speakerMatches
- *   3. Fallback label               — "They" / "Me" for keys 0/1, else "Speaker N"
+ *   1. Per-item override (meta.speakerItemOverrides[itemIndex]) — highest priority
+ *   2. meta.speakerNames[key]       — explicit per-recording override
+ *   3. profile.name via profileId   — live lookup through speakerMatches
+ *   4. Fallback label               — "They" / "Me" for keys 0/1, else "Speaker N"
  */
 export function resolveSpeakerDisplayName(
   speakerKey: string,
   meta: RecordingMeta,
   profilesById: Record<string, SpeakerProfile>,
+  itemIndex?: number,
 ): string {
+  // 1. Per-item override (highest priority)
+  if (itemIndex !== undefined) {
+    const overrideProfileId = meta.speakerItemOverrides?.[String(itemIndex)];
+    if (overrideProfileId && profilesById[overrideProfileId]) {
+      return profilesById[overrideProfileId].name;
+    }
+  }
+  // 2. Explicit per-recording name
   const explicit = meta.speakerNames?.[speakerKey];
   if (explicit) return explicit;
+  // 3. Profile via speakerMatches
   const profileId = meta.speakerMatches?.[speakerKey]?.profileId;
   if (profileId && profilesById[profileId]) return profilesById[profileId].name;
-  // Fallback: key "0" = "They", key "1" = "Me", else "Speaker N"
+  // 4. Fallback: key "0" = "They", key "1" = "Me", else "Speaker N"
   if (speakerKey === "0") return "They";
   if (speakerKey === "1") return "Me";
   return `Speaker ${speakerKey}`;

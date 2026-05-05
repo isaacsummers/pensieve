@@ -164,4 +164,40 @@ export const speakerProfilesApi = {
    */
   deleteSpeakerAvatar: async (profileId: string) =>
     profiles.deleteSpeakerAvatar(profileId),
+
+  /**
+   * Set a per-item speaker override on a transcript segment.
+   * The profileId will override the resolved display name for that specific
+   * item index only. Other segments are unaffected.
+   */
+  setTranscriptItemSpeakerOverride: async (
+    recordingId: string,
+    itemIndex: number,
+    profileId: string,
+  ) => {
+    const meta = await history.getRecordingMeta(recordingId);
+    const nextOverrides: NonNullable<typeof meta.speakerItemOverrides> = {
+      ...(meta.speakerItemOverrides ?? {}),
+    };
+    nextOverrides[String(itemIndex)] = profileId;
+    await history.updateRecording(recordingId, { speakerItemOverrides: nextOverrides });
+    return nextOverrides;
+  },
+
+  /**
+   * Clear a per-item speaker override, restoring normal resolution for that
+   * specific transcript segment.
+   */
+  clearTranscriptItemSpeakerOverride: async (
+    recordingId: string,
+    itemIndex: number,
+  ) => {
+    const meta = await history.getRecordingMeta(recordingId);
+    const nextOverrides: NonNullable<typeof meta.speakerItemOverrides> = {
+      ...(meta.speakerItemOverrides ?? {}),
+    };
+    delete nextOverrides[String(itemIndex)];
+    await history.updateRecording(recordingId, { speakerItemOverrides: nextOverrides });
+    return nextOverrides;
+  },
 };

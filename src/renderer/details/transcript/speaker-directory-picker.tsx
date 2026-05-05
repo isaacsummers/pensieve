@@ -29,6 +29,17 @@ export type SpeakerDirectoryPickerProps = {
   onClose: () => void;
   /** Whether to prompt for embedding update when a raw embedding is available. */
   onSuggestEmbeddingUpdate?: (profileId: string) => void;
+  /**
+   * When true, this picker is used for per-segment override rather than
+   * recording-level assignment.
+   */
+  isSegmentOverride?: boolean;
+  /** The transcript item index for segment overrides. */
+  itemIndex?: number;
+  /** The current display name of the speaker (used in the subtitle). */
+  currentSpeakerName?: string;
+  /** Called when the user wants to clear an existing segment override. */
+  onClearOverride?: () => void;
 };
 
 const getInitials = (name: string) =>
@@ -87,6 +98,10 @@ export const SpeakerDirectoryPicker: FC<SpeakerDirectoryPickerProps> = ({
   onAssigned,
   onClose,
   onSuggestEmbeddingUpdate,
+  isSegmentOverride,
+  itemIndex,
+  currentSpeakerName,
+  onClearOverride,
 }) => {
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
@@ -145,16 +160,26 @@ export const SpeakerDirectoryPicker: FC<SpeakerDirectoryPickerProps> = ({
     setAssigning(true);
     setError(null);
     try {
-      const result = await speakerProfilesApi.assignSpeakerToProfile(
-        recordingId,
-        speakerKey,
-        selectedId,
-      );
-      qc.invalidateQueries({ queryKey: [QueryKeys.SpeakerProfiles] });
-      if (result.suggestEmbeddingUpdate && onSuggestEmbeddingUpdate) {
-        onSuggestEmbeddingUpdate(selectedId);
+      if (isSegmentOverride && itemIndex !== undefined) {
+        // Per-segment override: don't touch the recording-level profile assignment.
+        await speakerProfilesApi.setTranscriptItemSpeakerOverride(
+          recordingId,
+          itemIndex,
+          selectedId,
+        );
+        onAssigned(selectedId);
+      } else {
+        const result = await speakerProfilesApi.assignSpeakerToProfile(
+          recordingId,
+          speakerKey,
+          selectedId,
+        );
+        qc.invalidateQueries({ queryKey: [QueryKeys.SpeakerProfiles] });
+        if (result.suggestEmbeddingUpdate && onSuggestEmbeddingUpdate) {
+          onSuggestEmbeddingUpdate(selectedId);
+        }
+        onAssigned(selectedId);
       }
-      onAssigned(selectedId);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -179,9 +204,15 @@ export const SpeakerDirectoryPicker: FC<SpeakerDirectoryPickerProps> = ({
   return (
     <Dialog.Root open onOpenChange={(open) => { if (!open) onClose(); }}>
       <Dialog.Content maxWidth="420px">
-        <Dialog.Title>Identify speaker</Dialog.Title>
+        <Dialog.Title>
+          {isSegmentOverride ? "Override speaker for this segment only" : "Identify speaker"}
+        </Dialog.Title>
         <Dialog.Description size="2" color="gray" mb="1rem">
-          Link this speaker to a saved voice profile.
+          {isSegmentOverride
+            ? `This will only affect this one line. Other segments labeled '${
+                currentSpeakerName ?? "this speaker"
+              }' won't change.`
+            : "Link this speaker to a saved voice profile."}
         </Dialog.Description>
 
         <TextField.Root
@@ -287,6 +318,20 @@ export const SpeakerDirectoryPicker: FC<SpeakerDirectoryPickerProps> = ({
         )}
 
         <Flex justify="end" gap="0.5rem" mt="1rem">
+          {isSegmentOverride && onClearOverride && (
+            <Tooltip content="Remove the override and restore the default speaker for this segment">
+              <Button
+                variant="soft"
+                color="red"
+                onClick={() => {
+                  onClearOverride();
+                  onClose();
+                }}
+              >
+                Clear override
+              </Button>
+            </Tooltip>
+          )}
           <Dialog.Close>
             <Button variant="soft" color="gray" onClick={onClose}>
               Cancel
@@ -296,7 +341,7 @@ export const SpeakerDirectoryPicker: FC<SpeakerDirectoryPickerProps> = ({
             disabled={!selectedId || assigning}
             onClick={handleAssign}
           >
-            {assigning ? <Spinner size="1" /> : "Assign"}
+            {assigning ? <Spinner size="1" /> : (isSegmentOverride ? "Override" : "Assign")}
           </Button>
         </Flex>
       </Dialog.Content>

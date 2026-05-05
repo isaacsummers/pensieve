@@ -92,9 +92,9 @@ export const runDatahooks = async (job: PostProcessingJob) => {
     ...recording,
     // Augment each transcript item with a resolved speakerName field while
     // keeping the raw speaker key intact for backwards compatibility.
-    transcript: transcript?.transcription.map((t) => ({
+    transcript: transcript?.transcription.map((t, i) => ({
       ...t,
-      speakerName: resolveSpeakerDisplayName(t.speaker, recording, profilesById),
+      speakerName: resolveSpeakerDisplayName(t.speaker, recording, profilesById, i),
     })),
     speakersMap,
     date: recording.started,
