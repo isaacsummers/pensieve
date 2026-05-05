@@ -3,6 +3,10 @@ import fs from "fs-extra";
 import { execa } from "execa";
 import log from "electron-log/main";
 import { getSettings } from "./settings";
+import {
+  ensureWhisperxProjectDir,
+  getWhisperxVenvPython,
+} from "./whisperx-venv";
 
 // --- Types -------------------------------------------------------------------
 
@@ -102,14 +106,27 @@ const indexUrlForCudaVersion = (version: string | null): string => {
  * can run `import torch` checks and pip operations against the same env.
  *
  * Resolution order:
- *   1. explicit `whisperx.pythonPath` setting
- *   2. uv-managed tool env: `uv tool dir whisperx` → `<dir>/Scripts|bin/python`
- *   3. null (caller treats as "couldn't introspect")
+ *   1. explicit `whisperx.pythonPath` setting (manual override)
+ *   2. project-managed venv at `<projectDir>/.venv` (created by `uv sync`
+ *      against the shipped pyproject.toml — this is the default)
+ *   3. legacy `uv tool dir whisperx` for users who installed via
+ *      `uv tool install whisperx` before the pyproject.toml migration
+ *   4. null (caller treats as "couldn't introspect")
  */
 export const resolveWhisperxPython = async (): Promise<string | null> => {
   const s = (await getSettings()).whisperx;
   const explicit = s.pythonPath?.trim();
   if (explicit) return explicit;
+
+  // Project-managed venv. We do NOT call ensureWhisperxProjectDir() here
+  // because this is a probe path — we just want to know if the venv
+  // exists, not create the project dir as a side effect.
+  try {
+    const projectPython = getWhisperxVenvPython();
+    if (fs.existsSync(projectPython)) return projectPython;
+  } catch {
+    /* electron app not ready / packaging issue — fall through */
+  }
 
   try {
     const r = await execa("uv", ["tool", "dir", "whisperx"], {
@@ -256,13 +273,17 @@ export const reinstallCudaTorch = async (
     return { ok: false, error: `Invalid index URL: ${indexUrl}` };
   }
 
-  const python = await resolveWhisperxPython();
-  if (!python) {
+  // The pyproject.toml drives the install — `indexUrl` is retained for
+  // API compatibility but no longer routes the install. The CUDA wheel
+  // index is declared in pyproject.toml's [tool.uv.sources].
+  let projectDir: string;
+  try {
+    projectDir = await ensureWhisperxProjectDir();
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
     return {
       ok: false,
-      error:
-        "Could not locate the WhisperX Python interpreter. Set Settings → " +
-        "WhisperX → Python interpreter, or install whisperx with `uv tool install whisperx`.",
+      error: `Could not prepare WhisperX project directory: ${msg}`,
     };
   }
 
@@ -275,23 +296,16 @@ export const reinstallCudaTorch = async (
     log: "",
   };
 
-  const args = [
-    "-m",
-    "pip",
-    "install",
-    "torch",
-    "torchvision",
-    "torchaudio",
-    "--index-url",
-    indexUrl,
-    "--force-reinstall",
-  ];
+  const args = ["sync"];
 
-  log.info(`[whisperx-cuda] reinstalling torch via ${python} ${args.join(" ")}`);
-  appendLog(`$ ${python} ${args.join(" ")}\n`);
+  log.info(
+    `[whisperx-cuda] running uv sync in ${projectDir} (declared index ignored param=${indexUrl})`,
+  );
+  appendLog(`$ (cwd=${projectDir}) uv ${args.join(" ")}\n`);
 
   try {
-    const proc = execa(python, args, {
+    const proc = execa("uv", args, {
+      cwd: projectDir,
       stdio: "pipe",
       timeout: INSTALL_TIMEOUT_MS,
       reject: false,
@@ -313,7 +327,7 @@ export const reinstallCudaTorch = async (
       invalidateCudaHealthCache();
       return { ok: true };
     }
-    const errMsg = `pip exited with code ${r.exitCode}`;
+    const errMsg = `uv sync exited with code ${r.exitCode}`;
     installState = {
       ...installState,
       inProgress: false,

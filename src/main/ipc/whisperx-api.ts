@@ -79,7 +79,7 @@ export const whisperxApi = {
       );
     } else {
       parts.push(
-        `WhisperX not found: ${wxResult.error ?? "unknown error"}. Install with \`uv tool install whisperx\` (or \`pipx install whisperx\`).`,
+        `WhisperX not found: ${wxResult.error ?? "unknown error"}. Open Settings → Audio Transcription and click Install to set up WhisperX (uv must be on PATH).`,
       );
     }
     if (ffmpegResult.ok) {

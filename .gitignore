@@ -115,3 +115,5 @@ dist-docs
 docs/index.md
 docs/images
 .vscode
+# Python venv managed by uv (whisperx project)
+python/.venv/

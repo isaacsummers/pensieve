@@ -1,0 +1,20 @@
+[project]
+name = "pensieve-whisperx"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+  "whisperx>=3.1.1",
+  "torch>=2.0.0",
+  "torchvision",
+  "torchaudio",
+]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cuda" }
+torchvision = { index = "pytorch-cuda" }
+torchaudio = { index = "pytorch-cuda" }
+
+[[tool.uv.indexes]]
+name = "pytorch-cuda"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true

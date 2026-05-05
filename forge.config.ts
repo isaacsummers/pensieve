@@ -118,6 +118,16 @@ const config: ForgeConfig = {
       await pngToIco(path.join(__dirname, "extra/icon@8x.png")).then((buf) =>
         fs.writeFileSync(path.join(__dirname, "extra/icon@8x.ico"), buf as any),
       );
+
+      // Bundle the WhisperX uv project's pyproject.toml into extraResources
+      // so the packaged app can copy it into userData and run `uv sync`.
+      // Renamed to avoid colliding with the app's own (root) pyproject if
+      // anything ever lands at extra/pyproject.toml.
+      await fs.copy(
+        path.join(__dirname, "python", "pyproject.toml"),
+        path.join(__dirname, "extra", "whisperx-pyproject.toml"),
+        { overwrite: true },
+      );
     },
   },
 };

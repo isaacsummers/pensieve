@@ -1,11 +1,14 @@
 import path from "path";
-import os from "os";
 import fs from "fs-extra";
 import { dialog, shell } from "electron";
 import log from "electron-log/main";
 import { buildArgs, getMillisecondsFromTimeString } from "../../main-utils";
 import * as ffmpeg from "./ffmpeg";
 import * as whisperxCuda from "./whisperx-cuda";
+import {
+  getWhisperxVenvBinary,
+  getWhisperxVenvPython,
+} from "./whisperx-venv";
 import * as runner from "./runner";
 import * as postprocess from "./postprocess";
 import * as speakerProfiles from "./speaker-profiles";
@@ -35,10 +38,25 @@ const getCommand = (
   if (settings.pythonPath && settings.pythonPath.trim()) {
     return { cmd: settings.pythonPath.trim(), prefix: ["-m", "whisperx"] };
   }
-  return {
-    cmd: (settings.executable && settings.executable.trim()) || "whisperx",
-    prefix: [],
-  };
+  if (settings.executable && settings.executable.trim()) {
+    return { cmd: settings.executable.trim(), prefix: [] };
+  }
+  // Project-managed venv: prefer running whisperx via the venv's Python
+  // (-m whisperx) when available, falling back to the venv's whisperx
+  // entry-point script, then finally to a bare `whisperx` on PATH.
+  try {
+    const venvPython = getWhisperxVenvPython();
+    if (fs.existsSync(venvPython)) {
+      return { cmd: venvPython, prefix: ["-m", "whisperx"] };
+    }
+    const venvBin = getWhisperxVenvBinary();
+    if (fs.existsSync(venvBin)) {
+      return { cmd: venvBin, prefix: [] };
+    }
+  } catch {
+    /* electron app not ready / packaging issue — fall through to PATH */
+  }
+  return { cmd: "whisperx", prefix: [] };
 };
 
 export const checkWhisperxAvailability = async (): Promise<{
@@ -74,17 +92,15 @@ export const checkWhisperxAvailability = async (): Promise<{
 };
 
 const showWhisperxWarning = async () => {
-  const isWindows = os.platform() === "win32";
-  const install = isWindows
-    ? "  uv tool install whisperx\n  (or)  uv pip install whisperx\n"
-    : "  pipx install whisperx\n  (or)  uv tool install whisperx\n";
   const result = await dialog.showMessageBox({
     type: "warning",
     title: "WhisperX not found",
     message: "Pensieve could not find a working WhisperX installation.",
     detail:
-      `Install WhisperX and ensure it is on PATH (or point to it under ` +
-      `Settings → Audio Transcription):\n\n${install}\nFor diarization you will also need to accept the pyannote terms on ` +
+      `Open Settings → Audio Transcription and click "Install" to set up ` +
+      `WhisperX. Pensieve will manage the Python environment for you ` +
+      `(uv is required on PATH).\n\n` +
+      `For diarization you will also need to accept the pyannote terms on ` +
       `Hugging Face and paste a HF token into Pensieve.`,
     buttons: ["OK", "Open WhisperX website"],
     defaultId: 0,
