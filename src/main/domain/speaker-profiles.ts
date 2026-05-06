@@ -6,7 +6,7 @@ import log from "electron-log/main";
 import { execa } from "execa";
 import * as settings from "./settings";
 import { getUvExecutable } from "../../main-utils";
-import { SpeakerProfile, RecordingMeta } from "../../types";
+import { RecordingMeta, SpeakerProfile } from "../../types";
 import { invalidateUiKeys } from "../ipc/invalidate-ui";
 import { QueryKeys } from "../../query-keys";
 import * as history from "./history";
@@ -134,7 +134,9 @@ export const upsertProfile = async (
   return created;
 };
 
-export const createSpeakerProfile = async (name: string): Promise<SpeakerProfile> => {
+export const createSpeakerProfile = async (
+  name: string,
+): Promise<SpeakerProfile> => {
   const s = await read();
   const now = new Date().toISOString();
   const profile: SpeakerProfile = {
@@ -1138,7 +1140,8 @@ export const mergeSpeakerProfiles = async (
   canonicalId: string,
   absorbedIds: string[],
 ): Promise<SpeakerProfile> => {
-  if (absorbedIds.length === 0) throw new Error("absorbedIds must not be empty");
+  if (absorbedIds.length === 0)
+    throw new Error("absorbedIds must not be empty");
 
   const s = await read();
 
@@ -1214,7 +1217,9 @@ export const mergeSpeakerProfiles = async (
     }
 
     if (changed) {
-      patchJobs.push(history.updateRecording(recordingId, { speakerMatches: nextMatches }));
+      patchJobs.push(
+        history.updateRecording(recordingId, { speakerMatches: nextMatches }),
+      );
     }
   }
 
@@ -1340,7 +1345,7 @@ export const assignSpeakerToProfile = async (
     rejectedSuggestions: nextRejected,
   });
 
-  const hasEmbedding = !!(meta.speakerEmbeddings?.[speakerKey]?.length);
+  const hasEmbedding = !!meta.speakerEmbeddings?.[speakerKey]?.length;
   return { ok: true, profile, suggestEmbeddingUpdate: hasEmbedding };
 };
 
@@ -1431,7 +1436,9 @@ export function resolveSpeakerDisplayName(
 /**
  * Load all profiles and return a profilesById map. Utility for main-process callers.
  */
-export async function loadProfilesById(): Promise<Record<string, SpeakerProfile>> {
+export async function loadProfilesById(): Promise<
+  Record<string, SpeakerProfile>
+> {
   const profiles = await listProfiles();
   return Object.fromEntries(profiles.map((p) => [p.id, p]));
 }
@@ -1455,4 +1462,107 @@ export const deleteSpeakerAvatar = async (
   }
 
   return profile;
+};
+
+// ---------------------------------------------------------------------------
+// Retroactive re-match
+// ---------------------------------------------------------------------------
+
+/**
+ * Re-score all recordings that have `speakerEmbeddings` stored against the
+ * current profile store. For any speaker key where the new best match
+ * meets `autoConfirmThreshold` and wasn't already confirmed matched,
+ * update `speakerMatches` and apply the running-mean embedding update to
+ * the matched profile.
+ *
+ * Honours `rejectedSuggestions` — speaker/profile pairs the user explicitly
+ * dismissed are skipped so this pass does not undo their decision.
+ *
+ * If `profileId` is supplied, only updates matches that resolve to that
+ * profile (useful after creating/confirming a single new profile).
+ *
+ * Returns the number of recording-speakerKey pairs updated.
+ */
+export const reMatchAllRecordings = async (
+  profileId?: string,
+): Promise<{ updated: number }> => {
+  const s = (await settings.getSettings()).whisperx;
+  const autoConfirmThreshold = s.embeddings?.autoConfirmThreshold ?? 0.8;
+
+  const allMetas = await history.listRecordings();
+  const allProfiles = await listProfiles();
+  if (allProfiles.length === 0) return { updated: 0 };
+
+  let updated = 0;
+
+  for (const [recordingId, meta] of Object.entries(allMetas)) {
+    const embeddings = meta.speakerEmbeddings ?? {};
+    if (Object.keys(embeddings).length === 0) {
+      // No embeddings for this recording — nothing to re-match.
+    } else {
+      let metaChanged = false;
+      const nextMatches: NonNullable<RecordingMeta["speakerMatches"]> = {
+        ...(meta.speakerMatches ?? {}),
+      };
+
+      for (const [speakerKey, embedding] of Object.entries(embeddings)) {
+        const hasEmbedding = !!embedding && embedding.length > 0;
+        const existing = nextMatches[speakerKey];
+        const alreadyMatched = !!existing?.matched;
+
+        if (hasEmbedding && !alreadyMatched) {
+          // Find the best matching profile (matchSpeaker walks the full store).
+          // eslint-disable-next-line no-await-in-loop
+          const best = await matchSpeaker(embedding, autoConfirmThreshold);
+          const rejectedForKey = meta.rejectedSuggestions?.[speakerKey] ?? [];
+          const passesProfileFilter =
+            !profileId || best.profileId === profileId;
+          const notRejected =
+            !!best.profileId && !rejectedForKey.includes(best.profileId);
+
+          if (
+            best.matched &&
+            best.profileId &&
+            passesProfileFilter &&
+            notRejected
+          ) {
+            // Apply the match to recording meta.
+            nextMatches[speakerKey] = {
+              profileId: best.profileId,
+              profileName: best.profileName,
+              confidence: best.confidence,
+              matched: true,
+            };
+
+            // Apply running-mean embedding update to the profile.
+            // eslint-disable-next-line no-await-in-loop
+            await upsertProfile({
+              id: best.profileId,
+              name: best.profileName ?? "",
+              embedding,
+              sampleCount: 1,
+              useRunningMean: true,
+            });
+
+            updated += 1;
+            metaChanged = true;
+          }
+        }
+      }
+
+      if (metaChanged) {
+        // eslint-disable-next-line no-await-in-loop
+        await history.updateRecording(recordingId, {
+          speakerMatches: nextMatches,
+        });
+      }
+    }
+  }
+
+  if (updated > 0) {
+    await invalidateUiKeys(QueryKeys.History);
+    await invalidateUiKeys(QueryKeys.SpeakerProfiles);
+  }
+
+  return { updated };
 };

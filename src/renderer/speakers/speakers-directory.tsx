@@ -7,20 +7,19 @@ import {
   Flex,
   Grid,
   Heading,
-  IconButton,
   Spinner,
   Text,
   TextField,
   Tooltip,
 } from "@radix-ui/themes";
 import {
+  HiOutlineArrowPath,
   HiOutlineMagnifyingGlass,
   HiOutlinePlusCircle,
-  HiOutlineUserCircle,
 } from "react-icons/hi2";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { SpeakerProfile, RecordingMeta } from "../../types";
-import { speakerProfilesApi, historyApi } from "../api";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { RecordingMeta, SpeakerProfile } from "../../types";
+import { historyApi, speakerProfilesApi } from "../api";
 import { QueryKeys } from "../../query-keys";
 import { SpeakerProfileDetail } from "./speaker-profile-detail";
 
@@ -98,7 +97,13 @@ const ProfileCard: FC<{
       {profile.name}
     </Text>
     {profile.aliases && profile.aliases.length > 0 && (
-      <Text size="1" color="gray" align="center" truncate style={{ maxWidth: "100%" }}>
+      <Text
+        size="1"
+        color="gray"
+        align="center"
+        truncate
+        style={{ maxWidth: "100%" }}
+      >
         {profile.aliases.join(", ")}
       </Text>
     )}
@@ -118,11 +123,15 @@ const ProfileCard: FC<{
 export const SpeakersDirectory: FC = () => {
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
-  const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
+  const [selectedProfileId, setSelectedProfileId] = useState<string | null>(
+    null,
+  );
   const [showAddModal, setShowAddModal] = useState(false);
   const [newName, setNewName] = useState("");
   const [adding, setAdding] = useState(false);
-  const [avatarUrls, setAvatarUrls] = useState<Record<string, string | null>>({});
+  const [avatarUrls, setAvatarUrls] = useState<Record<string, string | null>>(
+    {},
+  );
 
   const { data: profiles, isLoading: profilesLoading } = useQuery({
     queryKey: [QueryKeys.SpeakerProfiles],
@@ -144,18 +153,19 @@ export const SpeakersDirectory: FC = () => {
     if (!profiles) return;
     for (const profile of profiles) {
       if (profile.avatar) {
-        void speakerProfilesApi
-          .getSpeakerAvatarPath(profile.id)
-          .then((p) => {
-            setAvatarUrls((prev) => ({ ...prev, [profile.id]: p ? `file://${p}` : null }));
-          });
+        void speakerProfilesApi.getSpeakerAvatarPath(profile.id).then((p) => {
+          setAvatarUrls((prev) => ({
+            ...prev,
+            [profile.id]: p ? `file://${p}` : null,
+          }));
+        });
       } else {
         setAvatarUrls((prev) =>
           prev[profile.id] !== null ? { ...prev, [profile.id]: null } : prev,
         );
       }
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profiles?.map((p) => `${p.id}:${p.avatar ?? ""}`).join(",")]);
 
   const addSpeakerMutation = useMutation({
@@ -164,6 +174,33 @@ export const SpeakersDirectory: FC = () => {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: [QueryKeys.SpeakerProfiles] });
+    },
+  });
+
+  // Retroactive re-match: re-score every recording against the current
+  // profile store and confirm any match >= autoConfirmThreshold. Result
+  // text fades out after a few seconds so it doesn't pile up in the toolbar.
+  const [reMatchResult, setReMatchResult] = useState<
+    { kind: "ok"; updated: number } | { kind: "error"; message: string } | null
+  >(null);
+  useEffect(() => {
+    if (!reMatchResult) return undefined;
+    const t = setTimeout(() => setReMatchResult(null), 6_000);
+    return () => clearTimeout(t);
+  }, [reMatchResult]);
+
+  const reMatchMutation = useMutation({
+    mutationFn: async () => speakerProfilesApi.reMatchAllRecordings(),
+    onSuccess: (res) => {
+      setReMatchResult({ kind: "ok", updated: res?.updated ?? 0 });
+      qc.invalidateQueries({ queryKey: [QueryKeys.History] });
+      qc.invalidateQueries({ queryKey: [QueryKeys.SpeakerProfiles] });
+    },
+    onError: (err: unknown) => {
+      setReMatchResult({
+        kind: "error",
+        message: err instanceof Error ? err.message : String(err),
+      });
     },
   });
 
@@ -207,12 +244,47 @@ export const SpeakersDirectory: FC = () => {
   }
 
   return (
-    <Flex direction="column" gap="1rem" p="1.5rem" style={{ height: "100%", overflowY: "auto" }}>
+    <Flex
+      direction="column"
+      gap="1rem"
+      p="1.5rem"
+      style={{ height: "100%", overflowY: "auto" }}
+    >
       <Flex align="center" justify="between" gap="1rem">
         <Heading size="5">Speakers</Heading>
-        <Button onClick={() => setShowAddModal(true)}>
-          <HiOutlinePlusCircle /> Add speaker
-        </Button>
+        <Flex gap="0.5rem" align="center">
+          {reMatchResult && (
+            <Text
+              size="2"
+              color={reMatchResult.kind === "error" ? "red" : "gray"}
+              style={{ transition: "opacity 0.3s" }}
+            >
+              {reMatchResult.kind === "ok"
+                ? `${reMatchResult.updated} recording${
+                    reMatchResult.updated === 1 ? "" : "s"
+                  } updated`
+                : `Re-match failed: ${reMatchResult.message}`}
+            </Text>
+          )}
+          <Tooltip content="Re-score all past recordings against the current speaker profiles. Confirms any match at or above the auto-confirm threshold.">
+            <Button
+              variant="soft"
+              color="gray"
+              onClick={() => reMatchMutation.mutate()}
+              disabled={reMatchMutation.isPending}
+            >
+              {reMatchMutation.isPending ? (
+                <Spinner size="1" />
+              ) : (
+                <HiOutlineArrowPath />
+              )}
+              Re-match recordings
+            </Button>
+          </Tooltip>
+          <Button onClick={() => setShowAddModal(true)}>
+            <HiOutlinePlusCircle /> Add speaker
+          </Button>
+        </Flex>
       </Flex>
 
       <TextField.Root
@@ -235,7 +307,9 @@ export const SpeakersDirectory: FC = () => {
       {!profilesLoading && filtered.length === 0 && (
         <Flex align="center" justify="center" py="3rem">
           <Text color="gray">
-            {search ? "No speakers match your search." : "No speaker profiles yet."}
+            {search
+              ? "No speakers match your search."
+              : "No speaker profiles yet."}
           </Text>
         </Flex>
       )}
@@ -254,7 +328,12 @@ export const SpeakersDirectory: FC = () => {
       </Grid>
 
       {/* Add speaker dialog */}
-      <Dialog.Root open={showAddModal} onOpenChange={(open) => { if (!open) setShowAddModal(false); }}>
+      <Dialog.Root
+        open={showAddModal}
+        onOpenChange={(open) => {
+          if (!open) setShowAddModal(false);
+        }}
+      >
         <Dialog.Content maxWidth="360px">
           <Dialog.Title>Add speaker</Dialog.Title>
           <TextField.Root
@@ -263,18 +342,28 @@ export const SpeakersDirectory: FC = () => {
             onChange={(e) => setNewName(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") handleAddSpeaker();
-              if (e.key === "Escape") { setShowAddModal(false); setNewName(""); }
+              if (e.key === "Escape") {
+                setShowAddModal(false);
+                setNewName("");
+              }
             }}
             autoFocus
             mt="0.5rem"
           />
           <Flex justify="end" gap="0.5rem" mt="1rem">
             <Dialog.Close>
-              <Button variant="soft" color="gray" onClick={() => setShowAddModal(false)}>
+              <Button
+                variant="soft"
+                color="gray"
+                onClick={() => setShowAddModal(false)}
+              >
                 Cancel
               </Button>
             </Dialog.Close>
-            <Button disabled={!newName.trim() || adding} onClick={handleAddSpeaker}>
+            <Button
+              disabled={!newName.trim() || adding}
+              onClick={handleAddSpeaker}
+            >
               {adding ? <Spinner size="1" /> : "Create"}
             </Button>
           </Flex>

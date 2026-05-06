@@ -6,7 +6,8 @@ export const speakerProfilesApi = {
   list: async () => profiles.listProfiles(),
 
   /** Create a new empty speaker profile with the given name. */
-  createSpeakerProfile: async (name: string) => profiles.createSpeakerProfile(name),
+  createSpeakerProfile: async (name: string) =>
+    profiles.createSpeakerProfile(name),
 
   rename: async (id: string, name: string) => profiles.renameProfile(id, name),
 
@@ -106,10 +107,17 @@ export const speakerProfilesApi = {
    * participants; absorbed profiles are deleted; all recording metas are
    * updated to point to the canonical id.
    */
-  mergeSpeakerProfiles: async (
-    canonicalId: string,
-    absorbedIds: string[],
-  ) => profiles.mergeSpeakerProfiles(canonicalId, absorbedIds),
+  mergeSpeakerProfiles: async (canonicalId: string, absorbedIds: string[]) =>
+    profiles.mergeSpeakerProfiles(canonicalId, absorbedIds),
+
+  /**
+   * Re-score all past recordings against the current profile store.
+   * Confirms any match that meets `autoConfirmThreshold` and wasn't
+   * already matched. Optional `profileId` scopes the update to a single
+   * profile. Returns `{ updated: number }`.
+   */
+  reMatchAllRecordings: async (profileId?: string) =>
+    profiles.reMatchAllRecordings(profileId),
 
   /**
    * Non-destructive manual assignment: link a speaker key on a single
@@ -147,10 +155,8 @@ export const speakerProfilesApi = {
    * Set the avatar for a speaker profile from a base64 data URL.
    * Returns the updated profile.
    */
-  setSpeakerAvatar: async (
-    profileId: string,
-    imageDataUrl: string,
-  ) => profiles.setSpeakerAvatar(profileId, imageDataUrl),
+  setSpeakerAvatar: async (profileId: string, imageDataUrl: string) =>
+    profiles.setSpeakerAvatar(profileId, imageDataUrl),
 
   /**
    * Return the full filesystem path to the avatar file for `profileId`,
@@ -180,7 +186,9 @@ export const speakerProfilesApi = {
       ...(meta.speakerItemOverrides ?? {}),
     };
     nextOverrides[String(itemIndex)] = profileId;
-    await history.updateRecording(recordingId, { speakerItemOverrides: nextOverrides });
+    await history.updateRecording(recordingId, {
+      speakerItemOverrides: nextOverrides,
+    });
     return nextOverrides;
   },
 
@@ -197,7 +205,9 @@ export const speakerProfilesApi = {
       ...(meta.speakerItemOverrides ?? {}),
     };
     delete nextOverrides[String(itemIndex)];
-    await history.updateRecording(recordingId, { speakerItemOverrides: nextOverrides });
+    await history.updateRecording(recordingId, {
+      speakerItemOverrides: nextOverrides,
+    });
     return nextOverrides;
   },
 
@@ -215,7 +225,8 @@ export const speakerProfilesApi = {
     const meta = await history.getRecordingMeta(recordingId);
     const transcript = await history.getRecordingTranscript(recordingId);
     const items = transcript?.transcription ?? [];
-    const matchedProfileId = meta.speakerMatches?.[speakerKey]?.profileId ?? null;
+    const matchedProfileId =
+      meta.speakerMatches?.[speakerKey]?.profileId ?? null;
     const currentOverrides = meta.speakerItemOverrides ?? {};
 
     const nextOverrides: NonNullable<typeof meta.speakerItemOverrides> = {};
@@ -230,7 +241,9 @@ export const speakerProfilesApi = {
       }
     }
 
-    await history.updateRecording(recordingId, { speakerItemOverrides: nextOverrides });
+    await history.updateRecording(recordingId, {
+      speakerItemOverrides: nextOverrides,
+    });
     return meta;
   },
 };
